@@ -5,6 +5,8 @@ use anyhow::Result;
 use regex::Regex;
 
 pub struct FinancialDetector {
+    financial_enabled: bool,
+    dates_enabled: bool,
     amount_regex: Regex,
     amount_inr_regex: Regex,
     percent_regex: Regex,
@@ -13,8 +15,10 @@ pub struct FinancialDetector {
 }
 
 impl FinancialDetector {
-    pub fn new(_config: &DetectionConfig) -> Result<Self> {
+    pub fn new(config: &DetectionConfig) -> Result<Self> {
         Ok(Self {
+            financial_enabled: config.financial,
+            dates_enabled: config.dates,
             // Matches: $1.2M, ₹3.4L Cr, €500K, £2.1B, $12,345.67, etc.
             amount_regex: Regex::new(
                 r"(?:[$€£₹¥])\s*[\d,]+(?:\.\d+)?\s*(?:[KMBT]|[Ll](?:akh)?|[Cc]r(?:ore)?)?(?:\s+(?:million|billion|trillion|crore|lakh))?"
@@ -37,59 +41,63 @@ impl FinancialDetector {
     pub fn detect(&self, text: &str) -> Result<Vec<DetectedEntity>> {
         let mut entities = Vec::new();
 
-        for mat in self.amount_regex.find_iter(text) {
-            entities.push(DetectedEntity {
-                original: mat.as_str().to_string(),
-                start: mat.start(),
-                end: mat.end(),
-                category: EntityCategory::Amount,
-                confidence: 1.0,
-                source: DetectionSource::Financial,
-            });
+        if self.financial_enabled {
+            for mat in self.amount_regex.find_iter(text) {
+                entities.push(DetectedEntity {
+                    original: mat.as_str().to_string(),
+                    start: mat.start(),
+                    end: mat.end(),
+                    category: EntityCategory::Amount,
+                    confidence: 1.0,
+                    source: DetectionSource::Financial,
+                });
+            }
+
+            for mat in self.amount_inr_regex.find_iter(text) {
+                entities.push(DetectedEntity {
+                    original: mat.as_str().to_string(),
+                    start: mat.start(),
+                    end: mat.end(),
+                    category: EntityCategory::Amount,
+                    confidence: 1.0,
+                    source: DetectionSource::Financial,
+                });
+            }
+
+            for mat in self.percent_regex.find_iter(text) {
+                entities.push(DetectedEntity {
+                    original: mat.as_str().to_string(),
+                    start: mat.start(),
+                    end: mat.end(),
+                    category: EntityCategory::Percentage,
+                    confidence: 1.0,
+                    source: DetectionSource::Financial,
+                });
+            }
         }
 
-        for mat in self.amount_inr_regex.find_iter(text) {
-            entities.push(DetectedEntity {
-                original: mat.as_str().to_string(),
-                start: mat.start(),
-                end: mat.end(),
-                category: EntityCategory::Amount,
-                confidence: 1.0,
-                source: DetectionSource::Financial,
-            });
-        }
+        if self.dates_enabled {
+            for mat in self.fiscal_regex.find_iter(text) {
+                entities.push(DetectedEntity {
+                    original: mat.as_str().to_string(),
+                    start: mat.start(),
+                    end: mat.end(),
+                    category: EntityCategory::Date,
+                    confidence: 1.0,
+                    source: DetectionSource::Financial,
+                });
+            }
 
-        for mat in self.percent_regex.find_iter(text) {
-            entities.push(DetectedEntity {
-                original: mat.as_str().to_string(),
-                start: mat.start(),
-                end: mat.end(),
-                category: EntityCategory::Percentage,
-                confidence: 1.0,
-                source: DetectionSource::Financial,
-            });
-        }
-
-        for mat in self.fiscal_regex.find_iter(text) {
-            entities.push(DetectedEntity {
-                original: mat.as_str().to_string(),
-                start: mat.start(),
-                end: mat.end(),
-                category: EntityCategory::Date,
-                confidence: 1.0,
-                source: DetectionSource::Financial,
-            });
-        }
-
-        for mat in self.date_regex.find_iter(text) {
-            entities.push(DetectedEntity {
-                original: mat.as_str().to_string(),
-                start: mat.start(),
-                end: mat.end(),
-                category: EntityCategory::Date,
-                confidence: 1.0,
-                source: DetectionSource::Financial,
-            });
+            for mat in self.date_regex.find_iter(text) {
+                entities.push(DetectedEntity {
+                    original: mat.as_str().to_string(),
+                    start: mat.start(),
+                    end: mat.end(),
+                    category: EntityCategory::Date,
+                    confidence: 1.0,
+                    source: DetectionSource::Financial,
+                });
+            }
         }
 
         Ok(entities)

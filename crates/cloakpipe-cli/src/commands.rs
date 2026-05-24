@@ -10,6 +10,9 @@ use cloakpipe_core::{
 };
 use cloakpipe_proxy::{server, state::AppState};
 
+const GLINER_PIP_PACKAGE: &str = "gliner";
+const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
+
 /// Load configuration from TOML file.
 fn load_config(path: &str) -> Result<CloakPipeConfig> {
     let content =
@@ -280,6 +283,146 @@ pub async fn setup() -> Result<()> {
     println!("  3. Run: cloakpipe start");
 
     Ok(())
+}
+
+/// NER management commands.
+pub async fn ner(action: crate::NerCommands) -> Result<()> {
+    match action {
+        crate::NerCommands::Install {
+            backend,
+            dry_run,
+            python,
+            no_verify,
+        } => match backend {
+            crate::NerInstallBackend::GlinerPii => {
+                install_gliner_pii(python, dry_run, no_verify)
+            }
+        },
+    }
+}
+
+fn install_gliner_pii(
+    python: Option<String>,
+    dry_run: bool,
+    no_verify: bool,
+) -> Result<()> {
+    let python = match python {
+        Some(python) => python,
+        None if dry_run => "python3".to_string(),
+        None => detect_python_interpreter()?,
+    };
+
+    let install_args = ["-m", "pip", "install", GLINER_PIP_PACKAGE];
+
+    if dry_run {
+        println!("NER backend: gliner-pii");
+        println!(
+            "Would run: {}",
+            format_command(&python, &install_args)
+        );
+        print_gliner_next_steps(&python);
+        return Ok(());
+    }
+
+    println!("Installing GLiNER-PII sidecar dependency...");
+    println!("  {}", format_command(&python, &install_args));
+
+    let install_output = std::process::Command::new(&python)
+        .args(install_args)
+        .output()
+        .with_context(|| format!("Failed to launch {}", format_command(&python, &install_args)))?;
+
+    if !install_output.status.success() {
+        bail!(
+            "GLiNER install failed.\n{}",
+            render_process_output(&install_output)
+        );
+    }
+
+    if !no_verify {
+        let verify_args = ["-c", "from gliner import GLiNER; print('GLiNER import OK')"];
+        let verify_output = std::process::Command::new(&python)
+            .args(verify_args)
+            .output()
+            .with_context(|| format!("Failed to launch {}", format_command(&python, &verify_args)))?;
+
+        if !verify_output.status.success() {
+            bail!(
+                "Installed package but verification failed.\n{}",
+                render_process_output(&verify_output)
+            );
+        }
+    }
+
+    println!("Installed {} successfully.", GLINER_PIP_PACKAGE);
+    if no_verify {
+        println!("Skipped import verification (--no-verify).");
+    }
+    print_gliner_next_steps(&python);
+
+    Ok(())
+}
+
+fn detect_python_interpreter() -> Result<String> {
+    for candidate in ["python3", "python", "py"] {
+        if command_available(candidate) {
+            return Ok(candidate.to_string());
+        }
+    }
+
+    bail!(
+        "No Python interpreter found. Install Python 3 or rerun with --python <path>."
+    )
+}
+
+fn command_available(command: &str) -> bool {
+    std::process::Command::new(command)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn render_process_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => "Process exited without output.".to_string(),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (false, false) => format!("stdout:\n{}\n\nstderr:\n{}", stdout, stderr),
+    }
+}
+
+fn format_command(command: &str, args: &[&str]) -> String {
+    std::iter::once(command)
+        .chain(args.iter().copied())
+        .map(format_cli_arg)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_cli_arg(arg: &str) -> String {
+    if arg.chars().any(char::is_whitespace) {
+        format!("\"{}\"", arg.replace('"', "\\\""))
+    } else {
+        arg.to_string()
+    }
+}
+
+fn print_gliner_next_steps(python: &str) {
+    println!("\nNext steps:");
+    println!(
+        "  1. Start the sidecar: {} tools/gliner-pii-server.py",
+        format_cli_arg(python)
+    );
+    println!("  2. Enable this in cloakpipe.toml:");
+    println!("     [detection.ner]");
+    println!("     enabled = true");
+    println!("     backend = \"gliner_pii\"");
+    println!("     sidecar_url = \"{}\"", GLINER_SIDECAR_URL);
+    println!("     confidence_threshold = 0.4");
 }
 
 /// Start as MCP server (stdio transport).

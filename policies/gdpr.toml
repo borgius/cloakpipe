@@ -1,0 +1,52 @@
+# CloakPipe policy preset: GDPR
+# Broad personal-data protection defaults for EU workloads.
+# Focuses on structured identifiers, network identifiers, and contextual finance data.
+# Optional NER can be enabled when a local model is available.
+
+[proxy]
+listen = "127.0.0.1:8400"
+upstream = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 120
+max_concurrent = 256
+mode = "proxy"
+masking_strategy = "token"
+
+[vault]
+path = "./vault.enc"
+encryption = "aes-256-gcm"
+key_env = "CLOAKPIPE_VAULT_KEY"
+backend = "file"
+
+[detection]
+secrets = true
+financial = true
+dates = true
+emails = true
+phone_numbers = true
+ip_addresses = true
+urls_internal = true
+
+[detection.ner]
+enabled = false
+backend = "distilbert_pii"
+confidence_threshold = 0.70
+# model = "models/distilbert-pii/quantized/model_quantized.onnx"
+
+[detection.custom]
+patterns = [
+  { name = "iban", regex = "\\b[A-Z]{2}\\d{2}[A-Z0-9]{11,30}\\b", category = "IBAN" },
+  { name = "vat_id", regex = "(?i)\\b(?:VAT|VAT\\s*ID|VATIN)[:#\\s-]*[A-Z]{2}[A-Z0-9]{8,12}\\b", category = "VAT_ID" },
+]
+
+[detection.overrides]
+preserve = []
+force = []
+
+[audit]
+enabled = true
+log_path = "./audit/"
+format = "jsonl"
+retention_days = 90
+log_entities = true
+log_mappings = false

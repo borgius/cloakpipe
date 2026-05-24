@@ -1,13 +1,14 @@
 //! Integration tests for the CloakPipe core pipeline.
 
 use cloakpipe_core::{
-    config::{CustomConfig, CustomPattern, DetectionConfig, NerConfig, OverrideConfig},
+    config::{CloakPipeConfig, CustomConfig, CustomPattern, DetectionConfig, NerConfig, OverrideConfig},
     detector::Detector,
     replacer::Replacer,
     rehydrator::Rehydrator,
     vault::Vault,
     EntityCategory,
 };
+use std::{fs, path::Path};
 
 fn test_detection_config() -> DetectionConfig {
     DetectionConfig {
@@ -23,6 +24,22 @@ fn test_detection_config() -> DetectionConfig {
         overrides: OverrideConfig::default(),
         resolver: Default::default(),
     }
+}
+
+fn load_policy_config(name: &str) -> CloakPipeConfig {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../policies")
+        .join(name);
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read policy {}: {}", path.display(), err));
+    toml::from_str(&content)
+        .unwrap_or_else(|err| panic!("failed to parse policy {}: {}", path.display(), err))
+}
+
+fn has_custom_category(entities: &[cloakpipe_core::DetectedEntity], category: &str) -> bool {
+    entities.iter().any(|entity| {
+        matches!(&entity.category, EntityCategory::Custom(name) if name == category)
+    })
 }
 
 #[test]
@@ -67,6 +84,33 @@ fn test_detect_fiscal_date() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
     let entities = detector.detect("Results for Q3 2025 are out").unwrap();
     assert!(entities.iter().any(|e| e.category == EntityCategory::Date));
+}
+
+#[test]
+fn test_disable_financial_and_dates() {
+    let config = DetectionConfig {
+        secrets: false,
+        financial: false,
+        dates: false,
+        emails: false,
+        phone_numbers: false,
+        ip_addresses: false,
+        urls_internal: false,
+        ner: NerConfig::default(),
+        custom: CustomConfig::default(),
+        overrides: OverrideConfig::default(),
+        resolver: Default::default(),
+    };
+
+    let detector = Detector::from_config(&config).unwrap();
+    let entities = detector
+        .detect("Revenue was $1.2M on March 31, 2026 with 15% growth in Q3 2025")
+        .unwrap();
+
+    assert!(
+        entities.is_empty(),
+        "financial/date entities should be disabled, got: {entities:?}"
+    );
 }
 
 #[test]
@@ -136,6 +180,68 @@ fn test_preserve_list() {
     // public@example.com should be preserved (not detected)
     assert!(entities.iter().all(|e| e.original != "public@example.com"));
     assert!(entities.iter().any(|e| e.original == "private@secret.com"));
+}
+
+#[test]
+fn test_bundled_policy_files_parse_and_build_detectors() {
+    for name in [
+        "default.toml",
+        "dpdp.toml",
+        "gdpr.toml",
+        "hipaa.toml",
+        "pci-dss.toml",
+        "minimal.toml",
+    ] {
+        let config = load_policy_config(name);
+        Detector::from_config(&config.detection)
+            .unwrap_or_else(|err| panic!("failed to build detector for {name}: {err}"));
+    }
+}
+
+#[test]
+fn test_dpdp_policy_detects_india_specific_identifiers() {
+    let config = load_policy_config("dpdp.toml");
+    let detector = Detector::from_config(&config.detection).unwrap();
+    let entities = detector
+        .detect(
+            "Send funds to rajesh@okicici and invoice GSTIN 27AAPFU0939F1ZV. \
+             Beneficiary account number 123456789012.",
+        )
+        .unwrap();
+
+    assert!(has_custom_category(&entities, "UPI_ID"));
+    assert!(has_custom_category(&entities, "GSTIN"));
+    assert!(has_custom_category(&entities, "BANK_ACCOUNT"));
+}
+
+#[test]
+fn test_hipaa_policy_detects_healthcare_identifiers() {
+    let config = load_policy_config("hipaa.toml");
+    let detector = Detector::from_config(&config.detection).unwrap();
+    let entities = detector
+        .detect(
+            "Patient MRN: MRN-2024-99187, NPI number 1548293076, DEA AB1234567, \
+             ICD-10 E11.9.",
+        )
+        .unwrap();
+
+    assert!(has_custom_category(&entities, "MRN"));
+    assert!(has_custom_category(&entities, "NPI"));
+    assert!(has_custom_category(&entities, "DEA"));
+    assert!(has_custom_category(&entities, "ICD10"));
+}
+
+#[test]
+fn test_pci_policy_detects_cardholder_data() {
+    let config = load_policy_config("pci-dss.toml");
+    let detector = Detector::from_config(&config.detection).unwrap();
+    let entities = detector
+        .detect("Card number 4111 1111 1111 1111, exp 12/29, CVV 123")
+        .unwrap();
+
+    assert!(has_custom_category(&entities, "CREDIT_CARD"));
+    assert!(has_custom_category(&entities, "CARD_EXPIRY"));
+    assert!(has_custom_category(&entities, "CARD_VERIFICATION_CODE"));
 }
 
 // --- Pseudonymize + Rehydrate roundtrip ---

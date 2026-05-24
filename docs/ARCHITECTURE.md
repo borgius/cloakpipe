@@ -217,11 +217,11 @@ cloakpipe/
 │
 ├── policies/                       # Detection rule configurations
 │   ├── default.toml
-│   └── examples/
-│       ├── healthcare.toml         # HIPAA-oriented rules
-│       ├── finance.toml            # SOX/PCI-DSS rules
-│       ├── legal.toml              # Legal privilege rules
-│       └── enterprise.toml         # General enterprise
+│   ├── dpdp.toml                   # DPDP 2023-oriented rules
+│   ├── gdpr.toml                   # GDPR-oriented rules
+│   ├── hipaa.toml                  # HIPAA-oriented rules
+│   ├── pci-dss.toml                # PCI-DSS-oriented rules
+│   └── minimal.toml                # Minimal high-confidence structured PII
 │
 └── models/                         # Optional ONNX NER models
     └── ner-english-base.onnx

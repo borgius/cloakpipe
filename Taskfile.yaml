@@ -1,0 +1,15 @@
+version: '3'
+
+vars:
+  CLI_CRATE: crates/cloakpipe-cli
+
+tasks:
+  build:
+    desc: Build the CloakPipe workspace
+    cmds:
+      - cargo build --workspace
+
+  install:
+    desc: Install the local cloakpipe CLI from this checkout
+    cmds:
+      - cargo install --path {{.CLI_CRATE}} --force

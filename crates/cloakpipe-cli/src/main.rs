@@ -2,7 +2,7 @@
 
 mod commands;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "cloakpipe")]
@@ -53,6 +53,11 @@ enum Commands {
         #[command(subcommand)]
         action: SessionCommands,
     },
+    /// NER backend helpers (install sidecar dependencies, etc.)
+    Ner {
+        #[command(subcommand)]
+        action: NerCommands,
+    },
     /// Scan files/directories for PII (RAG pre-indexing pipeline)
     Scan {
         /// Input file or directory (recursively scans .txt, .md, .json, .csv)
@@ -70,6 +75,31 @@ enum Commands {
         #[arg(long, default_value = "0.5")]
         min_confidence: f64,
     },
+}
+
+#[derive(Subcommand)]
+pub enum NerCommands {
+    /// Install a supported NER backend locally
+    Install {
+        /// Backend to install
+        #[arg(long, value_enum, default_value_t = NerInstallBackend::GlinerPii)]
+        backend: NerInstallBackend,
+        /// Print the install command without running it
+        #[arg(long)]
+        dry_run: bool,
+        /// Python interpreter to use (defaults to python3/python/py auto-detect)
+        #[arg(long)]
+        python: Option<String>,
+        /// Skip verifying that the backend imports after install
+        #[arg(long)]
+        no_verify: bool,
+    },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum NerInstallBackend {
+    #[value(alias = "gliner_pii")]
+    GlinerPii,
 }
 
 #[derive(Subcommand)]
@@ -174,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Tree { action } => commands::tree(&cli.config, action).await,
         Commands::Vector { action } => commands::vector(action).await,
         Commands::Sessions { action } => commands::sessions(&cli.config, action).await,
+        Commands::Ner { action } => commands::ner(action).await,
         Commands::Scan { input, output, strategy, detect_only, min_confidence } => {
             commands::scan(&cli.config, input, output, strategy, detect_only, min_confidence).await
         }

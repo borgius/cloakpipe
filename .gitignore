@@ -32,3 +32,4 @@ models/
 # Claude session data
 .claude/
 .reflect/
+.hypergrep/

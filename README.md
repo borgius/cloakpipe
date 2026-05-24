@@ -319,8 +319,8 @@ cloakpipe mask "Contact Priya at priya@example.com or +91 98765 43210"
 # Start the proxy server
 cloakpipe serve --port 3100
 
-# Start with a specific policy
-cloakpipe serve --port 3100 --policy policies/dpdp.yaml
+# Start with a specific bundled policy config
+cloakpipe --config policies/dpdp.toml start
 
 # Check proxy health
 cloakpipe health
@@ -343,7 +343,7 @@ CLOAKPIPE_UPSTREAM_URL=https://api.openai.com  # Default upstream LLM API
 CLOAKPIPE_TIMEOUT=30                   # Request timeout in seconds
 
 # Detection
-CLOAKPIPE_POLICY=policies/dpdp.yaml   # Policy file path
+# Select a bundled policy with: cloakpipe --config policies/dpdp.toml start
 CLOAKPIPE_MIN_CONFIDENCE=0.8          # Minimum NER confidence threshold (0.0–1.0)
 
 # Vault
@@ -356,51 +356,35 @@ CLOAKPIPE_CLOUD_TOKEN=                 # Cloud dashboard token (app.cloakpipe.co
 
 ### Policy Files
 
-CloakPipe uses YAML policy files to configure detection behavior per compliance framework:
+CloakPipe ships framework-specific policy presets as full `cloakpipe.toml`-compatible files in [`policies/`](policies/). Use them with the global `--config` flag:
 
-```yaml
-# policies/dpdp.yaml — India Digital Personal Data Protection Act
-name: "DPDP Act 2023"
-version: "1.0"
-description: "Policy for India's Digital Personal Data Protection Act"
-
-entities:
-  # Always detect and mask these
-  required:
-    - aadhaar_number
-    - pan_card
-    - upi_id
-    - person_name
-    - phone_number_in
-    - email_address
-    - date_of_birth
-    - address
-    - bank_account_in
-    - gstin
-
-  # Detect but warn (don't mask by default)
-  advisory:
-    - organization
-    - medical_term
-    - ip_address
-
-  # Skip these
-  disabled:
-    - ssn              # US-only
-    - passport_us      # US-only
-
-masking:
-  strategy: "deterministic"   # deterministic | random | hash
-  format: "{TYPE}_{ID}"       # e.g., PERSON_042
-  session_scope: true          # Same entity → same token within session
-
-logging:
-  log_detections: true
-  log_masked_prompts: false    # Never log original PII
-  export_format: "json"        # json | csv
+```bash
+cloakpipe --config policies/dpdp.toml start
 ```
 
-Pre-built policies included: `dpdp.yaml`, `gdpr.yaml`, `hipaa.yaml`, `pci-dss.yaml`, `minimal.yaml`
+Example (`policies/dpdp.toml`):
+
+```toml
+[detection]
+secrets = true
+financial = false
+dates = true
+emails = true
+phone_numbers = true
+ip_addresses = true
+urls_internal = false
+
+[detection.custom]
+patterns = [
+  { name = "upi_id", regex = "\\b[A-Za-z0-9._-]{2,}@[A-Za-z][A-Za-z0-9._-]{1,63}\\b", category = "UPI_ID" },
+  { name = "gstin", regex = "\\b\\d{2}[A-Z]{5}\\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\\b", category = "GSTIN" },
+  { name = "bank_account_in", regex = "(?i)\\b(?:account|a/c)\\s*(?:number|no\\.?|#)?[:\\s-]*\\d{9,18}\\b", category = "BANK_ACCOUNT" },
+]
+```
+
+Pre-built policies included: `dpdp.toml`, `gdpr.toml`, `hipaa.toml`, `pci-dss.toml`, `minimal.toml`
+
+See [`policies/README.md`](policies/README.md) for the framework mapping, included patterns, and compliance caveats.
 
 ---
 
@@ -424,10 +408,12 @@ cloakpipe/
 │   ├── cloakpipe-mcp        # MCP server (6 tools via rmcp)
 │   └── cloakpipe-cli        # CLI interface (scan, mask, serve, vault, session)
 ├── policies/
-│   ├── dpdp.yaml
-│   ├── gdpr.yaml
-│   ├── hipaa.yaml
-│   └── pci-dss.yaml
+│   ├── default.toml
+│   ├── dpdp.toml
+│   ├── gdpr.toml
+│   ├── hipaa.toml
+│   ├── pci-dss.toml
+│   └── minimal.toml
 ├── Cargo.toml
 ├── LICENSE
 └── README.md
@@ -528,21 +514,22 @@ CloakPipe helps you meet regulatory requirements by ensuring PII never reaches a
 
 | Framework | What CloakPipe provides | Can we claim it? |
 |---|---|---|
-| **DPDP Act 2023** (India) | Detects Aadhaar, PAN, UPI, GSTIN. Self-hosted mode keeps data within your infrastructure — no cross-border transfer of personal data. Pre-built `policies/dpdp.yaml` profile. | ✅ "Supports DPDP compliance" — no certification body exists; compliance is technical. |
+| **DPDP Act 2023** (India) | Detects Aadhaar, PAN, UPI, GSTIN, and contextual Indian bank-account references. Self-hosted mode keeps data within your infrastructure — no cross-border transfer of personal data. Pre-built `policies/dpdp.toml` profile. | ✅ "Supports DPDP compliance" — no certification body exists; compliance is technical. |
 | **GDPR** (EU) | Pseudonymization is explicitly recognized under GDPR Art. 25 (data protection by design). Tokens replace personal data before it reaches any third-party processor. | ✅ "GDPR-ready" — self-attested or validated by legal counsel. |
 | **HIPAA** (US) | PHI detection (patient IDs, diagnoses, medications), AES-256-GCM encrypted vault, tamper-evident audit logs meet HIPAA Security Rule technical safeguards. | ✅ "Supports HIPAA workflows" — HIPAA has no official certification body. |
-| **PCI-DSS** | Credit card (PAN) detection with Luhn validation, encrypted vault, no plaintext storage. Pre-built `policies/pci-dss.yaml`. | ✅ "Supports PCI-DSS workflows" — formal QSA audit required for full certification. |
+| **PCI-DSS** | Credit-card PAN, expiry, CVV, and track-data detection defaults with encrypted vault and no plaintext storage. Pre-built `policies/pci-dss.toml`. | ✅ "Supports PCI-DSS workflows" — formal QSA audit required for full certification. |
 | **SOC 2 Type II** | Structured audit logging, access controls, and incident response processes in place. Formal audit in roadmap. | 🔜 In progress — will not claim until third-party audit is complete. |
 
 Pre-built policy files are included in [`policies/`](policies/):
 
 ```
 policies/
-├── dpdp.yaml      # India Digital Personal Data Protection Act 2023
-├── gdpr.yaml      # EU General Data Protection Regulation
-├── hipaa.yaml     # US Health Insurance Portability and Accountability Act
-├── pci-dss.yaml   # Payment Card Industry Data Security Standard
-└── minimal.yaml   # Minimal — only high-confidence structured PII
+├── default.toml   # Baseline CloakPipe config
+├── dpdp.toml      # India Digital Personal Data Protection Act 2023
+├── gdpr.toml      # EU General Data Protection Regulation
+├── hipaa.toml     # US Health Insurance Portability and Accountability Act
+├── pci-dss.toml   # Payment Card Industry Data Security Standard
+└── minimal.toml   # Minimal — only high-confidence structured PII
 ```
 
 ---
@@ -556,14 +543,15 @@ version: '3.8'
 services:
   cloakpipe:
     image: ghcr.io/cloakpipe/cloakpipe:latest
+    command: ["--config", "/etc/cloakpipe/policies/dpdp.toml", "start"]
     ports:
       - "3100:3100"
     environment:
       - CLOAKPIPE_UPSTREAM_URL=https://api.openai.com
-      - CLOAKPIPE_POLICY=policies/dpdp.yaml
       - CLOAKPIPE_LOG_LEVEL=info
     volumes:
       - cloakpipe-vault:/data/vault
+      - ./policies:/etc/cloakpipe/policies:ro
     restart: unless-stopped
 
 volumes:
