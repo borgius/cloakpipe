@@ -81,13 +81,13 @@ pub struct DetectionConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NerBackend {
-    #[default]
     Bert,
     Gliner,
     /// nvidia/gliner-PII via Python sidecar (no ONNX deps required).
     #[serde(alias = "gliner-pii", alias = "gliner_pii")]
     GlinerPii,
     /// DistilBERT PII — 63MB ONNX model, 33 entity types, runs on any CPU.
+    #[default]
     #[serde(alias = "distilbert-pii", alias = "distilbert_pii")]
     DistilBertPii,
 }
@@ -234,5 +234,15 @@ impl Default for AuditConfig {
             log_mappings: false,
             backend: default_audit_backend(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NerBackend, NerConfig};
+
+    #[test]
+    fn ner_config_defaults_to_distilbert_pii_backend() {
+        assert!(matches!(NerConfig::default().backend, NerBackend::DistilBertPii));
     }
 }

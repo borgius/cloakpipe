@@ -27,7 +27,7 @@ urls_internal = true
 
 [detection.ner]
 enabled = false
-backend = "bert"
+backend = "distilbert_pii"
 confidence_threshold = 0.0
 entity_types = []
 sidecar_url = ""
