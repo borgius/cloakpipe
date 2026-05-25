@@ -9,10 +9,88 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use cloakpipe_core::{replacer::Replacer, rehydrator::Rehydrator, PseudoToken};
+use cloakpipe_core::{
+    config::DetectionConfig,
+    detector::Detector,
+    profiles::IndustryProfile,
+    replacer::Replacer,
+    rehydrator::Rehydrator,
+    PseudoToken,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 use uuid::Uuid;
+
+#[derive(Debug, Deserialize)]
+pub struct PseudonymizeRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RehydrateRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DetectRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfigureRequest {
+    pub profile: Option<String>,
+    pub enable: Option<Vec<String>>,
+    pub disable: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SessionContextRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PseudonymizeResponse {
+    text: String,
+    entities_detected: usize,
+    categories: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RehydrateResponse {
+    text: String,
+    tokens_rehydrated: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DetectResponse {
+    entities: Vec<EntityInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EntityInfo {
+    original: String,
+    category: String,
+    confidence: f64,
+    source: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VaultStatsResponse {
+    total_mappings: usize,
+    categories: HashMap<String, u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ConfigureResponse {
+    active_profile: Option<String>,
+    secrets: bool,
+    financial: bool,
+    dates: bool,
+    emails: bool,
+    phone_numbers: bool,
+    ip_addresses: bool,
+}
 
 /// Health check endpoint.
 pub async fn health() -> impl IntoResponse {
@@ -20,6 +98,202 @@ pub async fn health() -> impl IntoResponse {
         "status": "ok",
         "service": "cloakpipe"
     }))
+}
+
+/// Direct privacy endpoint: pseudonymize raw text.
+pub async fn api_pseudonymize(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<PseudonymizeRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let request_id = Uuid::new_v4().to_string();
+    let entities = detect_entities(&state, &params.text)
+        .await
+        .map_err(|e| {
+            tracing::error!(request_id = %request_id, "Detection failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Detection failed: {}", e))
+        })?;
+
+    let response = {
+        let mut vault = state.vault.lock().await;
+        let result = Replacer::pseudonymize(&params.text, &entities, &mut vault)
+            .map_err(|e| {
+                tracing::error!(request_id = %request_id, "Pseudonymize failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Pseudonymize failed: {}", e))
+            })?;
+
+        let categories = entity_categories(&entities);
+        let _ = state.audit.log_pseudonymize(
+            &request_id,
+            entities.len(),
+            entities.len(),
+            categories.clone(),
+        );
+
+        PseudonymizeResponse {
+            text: result.text,
+            entities_detected: entities.len(),
+            categories,
+        }
+    };
+
+    Ok(Json(response))
+}
+
+/// Direct privacy endpoint: rehydrate CloakPipe tokens.
+pub async fn api_rehydrate(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<RehydrateRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let request_id = Uuid::new_v4().to_string();
+    let response = {
+        let vault = state.vault.lock().await;
+        let result = Rehydrator::rehydrate(&params.text, &vault)
+            .map_err(|e| {
+                tracing::error!(request_id = %request_id, "Rehydrate failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Rehydrate failed: {}", e))
+            })?;
+
+        let _ = state.audit.log_rehydrate(&request_id, result.rehydrated_count);
+
+        RehydrateResponse {
+            text: result.text,
+            tokens_rehydrated: result.rehydrated_count,
+        }
+    };
+
+    Ok(Json(response))
+}
+
+/// Direct privacy endpoint: dry-run detection without replacement.
+pub async fn api_detect(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<DetectRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let entities = detect_entities(&state, &params.text)
+        .await
+        .map_err(|e| {
+            tracing::error!("Detection failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Detection failed: {}", e))
+        })?;
+
+    Ok(Json(DetectResponse {
+        entities: entities
+            .into_iter()
+            .map(|entity| EntityInfo {
+                original: entity.original,
+                category: format!("{:?}", entity.category),
+                confidence: entity.confidence,
+                source: format!("{:?}", entity.source),
+            })
+            .collect(),
+    }))
+}
+
+/// Direct privacy endpoint: safe aggregate vault stats.
+pub async fn api_vault_stats(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let response = {
+        let vault = state.vault.lock().await;
+        let stats = vault.stats();
+        VaultStatsResponse {
+            total_mappings: stats.total_mappings,
+            categories: stats.categories,
+        }
+    };
+
+    Json(response)
+}
+
+/// Direct privacy endpoint: switch profiles or toggle detection categories.
+pub async fn api_configure(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<ConfigureRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let mut next_config = state.detection_config.read().await.clone();
+    let mut next_active_profile = state.active_profile.read().await.clone();
+
+    if let Some(ref profile_name) = params.profile {
+        if let Some(profile) = IndustryProfile::from_name(profile_name) {
+            next_config = profile.detection_config();
+            next_active_profile = Some(profile.name().to_string());
+        } else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Error: Unknown profile '{}'. Use: general, legal, healthcare, fintech",
+                    profile_name
+                ),
+            ));
+        }
+    }
+
+    if let Some(ref enable) = params.enable {
+        apply_toggles(&mut next_config, enable, true);
+    }
+    if let Some(ref disable) = params.disable {
+        apply_toggles(&mut next_config, disable, false);
+    }
+
+    let new_detector = Detector::from_config(&next_config).map_err(|e| {
+        tracing::error!("Failed to rebuild detector: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Failed to rebuild detector: {}", e),
+        )
+    })?;
+
+    {
+        let mut config = state.detection_config.write().await;
+        *config = next_config.clone();
+    }
+    {
+        let mut detector = state.detector.write().await;
+        *detector = new_detector;
+    }
+    {
+        let mut active_profile = state.active_profile.write().await;
+        *active_profile = next_active_profile.clone();
+    }
+
+    Ok(Json(ConfigureResponse {
+        active_profile: next_active_profile,
+        secrets: next_config.secrets,
+        financial: next_config.financial,
+        dates: next_config.dates,
+        emails: next_config.emails,
+        phone_numbers: next_config.phone_numbers,
+        ip_addresses: next_config.ip_addresses,
+    }))
+}
+
+/// Direct privacy endpoint: inspect session stats in the MCP tool shape.
+pub async fn api_session_context(
+    State(state): State<Arc<AppState>>,
+    Json(params): Json<SessionContextRequest>,
+) -> impl IntoResponse {
+    let body = if params.session_id == "list" {
+        let sessions = state.sessions.list_sessions();
+        if sessions.is_empty() {
+            serde_json::json!({
+                "sessions": [],
+                "note": "No active sessions. Sessions are created when requests include x-session-id header."
+            })
+        } else {
+            serde_json::json!({
+                "sessions": sessions,
+                "total": sessions.len(),
+            })
+        }
+    } else if let Some(stats) = state.sessions.inspect(&params.session_id) {
+        serde_json::json!(stats)
+    } else {
+        serde_json::json!({
+            "error": format!("Session '{}' not found", params.session_id)
+        })
+    };
+
+    Json(body)
 }
 
 /// Extract session ID from request headers based on config.
@@ -36,6 +310,18 @@ fn extract_session_id(headers: &HeaderMap, id_from: &str) -> Option<String> {
     }
 }
 
+fn require_upstream_api_key(state: &AppState) -> Result<String, (StatusCode, String)> {
+    state
+        .upstream_api_key()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                state.missing_api_key_message(),
+            )
+        })
+}
+
 /// Proxy handler for /v1/chat/completions.
 /// Pseudonymizes the request, forwards to upstream, rehydrates the response.
 pub async fn proxy_chat_completions(
@@ -48,6 +334,7 @@ pub async fn proxy_chat_completions(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let api_key = require_upstream_api_key(&state)?;
 
     // Extract session ID if session tracking is enabled
     let session_id = if state.sessions.is_enabled() {
@@ -86,7 +373,7 @@ pub async fn proxy_chat_completions(
         .http_client
         .post(&upstream_url)
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", state.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .json(&body);
 
     if let Some(org) = headers.get("openai-organization") {
@@ -142,7 +429,7 @@ pub async fn proxy_chat_completions(
                     .and_then(|c| c.as_str())
                     .map(|s| s.to_string())
                 {
-                    if let Ok(mut scan_entities) = state.detector.detect(&content) {
+                    if let Ok(mut scan_entities) = detect_entities(&state, &content).await {
                         // Remove entities that are already in the vault (expected tokens)
                         scan_entities.retain(|e| !vault_read.contains_original(&e.original));
                         if !scan_entities.is_empty() {
@@ -202,6 +489,7 @@ pub async fn proxy_embeddings(
     Json(mut body): Json<Value>,
 ) -> Result<Response, (StatusCode, String)> {
     let request_id = Uuid::new_v4().to_string();
+    let api_key = require_upstream_api_key(&state)?;
 
     let entities_count = pseudonymize_embedding_input(&state, &mut body, &request_id)
         .await
@@ -225,7 +513,7 @@ pub async fn proxy_embeddings(
         .http_client
         .post(&upstream_url)
         .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", state.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .json(&body);
 
     if let Some(org) = headers.get("openai-organization") {
@@ -299,7 +587,6 @@ async fn pseudonymize_messages(
     let mut total_entities = 0;
 
     if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
-        let mut vault = state.vault.lock().await;
         for msg in messages {
             if let Some(content) = msg.get_mut("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
                 // Check sensitivity escalation before detection
@@ -318,7 +605,7 @@ async fn pseudonymize_messages(
                 }
 
                 // Standard detection
-                let mut entities = state.detector.detect(&content)?;
+                let mut entities = detect_entities(state, &content).await?;
 
                 // Resolve coreferences from session context
                 let mut coref_tokens: Vec<(usize, PseudoToken)> = Vec::new();
@@ -342,18 +629,23 @@ async fn pseudonymize_messages(
                 if !entities.is_empty() {
                     entities.sort_by_key(|e| e.start);
 
-                    let result = Replacer::pseudonymize(&content, &entities, &mut vault)?;
-                    msg["content"] = Value::String(result.text);
+                    let (pseudonymized_text, tokens) = {
+                        let mut vault = state.vault.lock().await;
+                        let result = Replacer::pseudonymize(&content, &entities, &mut vault)?;
 
-                    // Collect tokens for session recording
-                    let mut tokens: Vec<PseudoToken> = Vec::new();
-                    for (i, e) in entities.iter().enumerate() {
-                        if let Some((_, ref token)) = coref_tokens.iter().find(|(idx, _)| *idx == i) {
-                            tokens.push(token.clone());
-                        } else {
-                            tokens.push(vault.get_or_create(&e.original, &e.category));
+                        let mut tokens: Vec<PseudoToken> = Vec::new();
+                        for (i, e) in entities.iter().enumerate() {
+                            if let Some((_, token)) = coref_tokens.iter().find(|(idx, _)| *idx == i) {
+                                tokens.push(token.clone());
+                            } else {
+                                tokens.push(vault.get_or_create(&e.original, &e.category));
+                            }
                         }
-                    }
+
+                        (result.text, tokens)
+                    };
+
+                    msg["content"] = Value::String(pseudonymized_text);
 
                     // Record in session context
                     if let Some(sid) = session_id {
@@ -362,10 +654,7 @@ async fn pseudonymize_messages(
                         });
                     }
 
-                    let categories: Vec<String> = entities
-                        .iter()
-                        .map(|e| format!("{:?}", e.category))
-                        .collect();
+                    let categories = entity_categories(&entities);
 
                     let _ = state.audit.log_pseudonymize(
                         request_id,
@@ -390,21 +679,20 @@ async fn pseudonymize_embedding_input(
     request_id: &str,
 ) -> anyhow::Result<usize> {
     let mut total_entities = 0;
-    let mut vault = state.vault.lock().await;
 
     if let Some(input) = body.get_mut("input") {
         match input {
             Value::String(text) => {
                 let original = text.clone();
-                let entities = state.detector.detect(&original)?;
+                let entities = detect_entities(state, &original).await?;
                 if !entities.is_empty() {
-                    let result = Replacer::pseudonymize(&original, &entities, &mut vault)?;
+                    let result = {
+                        let mut vault = state.vault.lock().await;
+                        Replacer::pseudonymize(&original, &entities, &mut vault)?
+                    };
                     *input = Value::String(result.text);
 
-                    let categories: Vec<String> = entities
-                        .iter()
-                        .map(|e| format!("{:?}", e.category))
-                        .collect();
+                    let categories = entity_categories(&entities);
                     let _ = state.audit.log_pseudonymize(
                         request_id,
                         entities.len(),
@@ -417,15 +705,15 @@ async fn pseudonymize_embedding_input(
             Value::Array(items) => {
                 for item in items.iter_mut() {
                     if let Some(text) = item.as_str().map(|s| s.to_string()) {
-                        let entities = state.detector.detect(&text)?;
+                        let entities = detect_entities(state, &text).await?;
                         if !entities.is_empty() {
-                            let result = Replacer::pseudonymize(&text, &entities, &mut vault)?;
+                            let result = {
+                                let mut vault = state.vault.lock().await;
+                                Replacer::pseudonymize(&text, &entities, &mut vault)?
+                            };
                             *item = Value::String(result.text);
 
-                            let categories: Vec<String> = entities
-                                .iter()
-                                .map(|e| format!("{:?}", e.category))
-                                .collect();
+                            let categories = entity_categories(&entities);
                             let _ = state.audit.log_pseudonymize(
                                 request_id,
                                 entities.len(),
@@ -442,4 +730,38 @@ async fn pseudonymize_embedding_input(
     }
 
     Ok(total_entities)
+}
+
+async fn detect_entities(
+    state: &AppState,
+    text: &str,
+) -> anyhow::Result<Vec<cloakpipe_core::DetectedEntity>> {
+    let detector = state.detector.read().await;
+    detector.detect(text)
+}
+
+fn entity_categories(entities: &[cloakpipe_core::DetectedEntity]) -> Vec<String> {
+    let mut categories: Vec<String> = entities
+        .iter()
+        .map(|entity| format!("{:?}", entity.category))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    categories.sort();
+    categories
+}
+
+fn apply_toggles(config: &mut DetectionConfig, categories: &[String], value: bool) {
+    for category in categories {
+        match category.to_lowercase().as_str() {
+            "secrets" => config.secrets = value,
+            "financial" => config.financial = value,
+            "dates" => config.dates = value,
+            "emails" => config.emails = value,
+            "phone_numbers" | "phone" => config.phone_numbers = value,
+            "ip_addresses" | "ip" => config.ip_addresses = value,
+            "urls_internal" | "urls" => config.urls_internal = value,
+            _ => {}
+        }
+    }
 }

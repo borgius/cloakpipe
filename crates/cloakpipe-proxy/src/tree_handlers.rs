@@ -15,6 +15,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
+fn require_upstream_api_key(state: &AppState) -> Result<String, (StatusCode, String)> {
+    state
+        .upstream_api_key()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                state.missing_api_key_message(),
+            )
+        })
+}
+
 // --- Request/Response types ---
 
 #[derive(Deserialize)]
@@ -103,10 +115,11 @@ pub async fn tree_index_text(
     State(state): State<Arc<AppState>>,
     Json(req): Json<IndexTextRequest>,
 ) -> Result<Json<IndexResponse>, (StatusCode, String)> {
+    let api_key = require_upstream_api_key(&state)?;
     let tree_config = state.config.tree.clone();
     let indexer = TreeIndexer::new(
         tree_config.clone(),
-        state.api_key.clone(),
+        api_key,
         state.config.proxy.upstream.clone(),
     );
 
@@ -147,11 +160,12 @@ pub async fn tree_index_file(
     let file_path = body["file_path"]
         .as_str()
         .ok_or((StatusCode::BAD_REQUEST, "file_path required".to_string()))?;
+    let api_key = require_upstream_api_key(&state)?;
 
     let tree_config = state.config.tree.clone();
     let indexer = TreeIndexer::new(
         tree_config.clone(),
-        state.api_key.clone(),
+        api_key,
         state.config.proxy.upstream.clone(),
     );
 
@@ -243,6 +257,7 @@ pub async fn tree_search(
     Path(tree_id): Path<String>,
     Json(req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    let api_key = require_upstream_api_key(&state)?;
     let storage_path = &state.config.tree.storage_path;
     let tree_path = format!("{}/{}.json", storage_path, tree_id);
 
@@ -250,7 +265,7 @@ pub async fn tree_search(
         .map_err(|e| (StatusCode::NOT_FOUND, format!("Tree not found: {}", e)))?;
 
     let searcher = TreeSearcher::new(
-        state.api_key.clone(),
+        api_key,
         state.config.proxy.upstream.clone(),
         state.config.tree.search_model.clone(),
     );
@@ -284,6 +299,7 @@ pub async fn tree_query(
     State(state): State<Arc<AppState>>,
     Json(req): Json<QueryRequest>,
 ) -> Result<Json<QueryResponse>, (StatusCode, String)> {
+    let api_key = require_upstream_api_key(&state)?;
     let tree_config = state.config.tree.clone();
     let storage_path = &tree_config.storage_path;
 
@@ -296,7 +312,7 @@ pub async fn tree_query(
         let name = req.name.as_deref().unwrap_or("uploaded-document");
         let indexer = TreeIndexer::new(
             tree_config.clone(),
-            state.api_key.clone(),
+            api_key.clone(),
             state.config.proxy.upstream.clone(),
         );
         let tree = indexer
@@ -312,7 +328,7 @@ pub async fn tree_query(
 
     // Search
     let searcher = TreeSearcher::new(
-        state.api_key.clone(),
+        api_key.clone(),
         state.config.proxy.upstream.clone(),
         tree_config.search_model.clone(),
     );
@@ -362,7 +378,7 @@ pub async fn tree_query(
     let response = state
         .http_client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", state.api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .json(&answer_body)
         .send()
         .await

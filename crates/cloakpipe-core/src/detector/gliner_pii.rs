@@ -3,7 +3,7 @@
 //! Calls a lightweight Python HTTP sidecar running nvidia/gliner-PII for
 //! zero-shot NER detection of person names, addresses, organizations, etc.
 //!
-//! Start the sidecar: `python tools/gliner-pii-server.py`
+//! Start the sidecar: `cloakpipe ner start`
 //! Default endpoint: `http://127.0.0.1:9111/detect`
 
 use crate::{DetectedEntity, DetectionSource, EntityCategory};

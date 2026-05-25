@@ -1,6 +1,7 @@
 //! CloakPipe CLI — entrypoint for the privacy proxy.
 
 mod commands;
+mod presets;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -9,7 +10,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(about = "Privacy middleware for LLM & RAG pipelines")]
 #[command(version)]
 struct Cli {
-    /// Path to configuration file
+    /// Path to configuration file or bundled preset name (e.g. dpdp.toml)
     #[arg(short, long, default_value = "cloakpipe.toml")]
     config: String,
 
@@ -36,6 +37,11 @@ enum Commands {
     Init,
     /// Interactive guided setup (industry profiles, detection tuning)
     Setup,
+    /// Manage bundled configuration presets
+    Presets {
+        #[command(subcommand)]
+        action: PresetCommands,
+    },
     /// Start as an MCP server (for agent integrations)
     Mcp,
     /// CloakTree: vectorless document retrieval
@@ -78,6 +84,14 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+pub enum PresetCommands {
+    /// Install bundled presets into the user config directory
+    Install,
+    /// List bundled presets and where they resolve from
+    List,
+}
+
+#[derive(Subcommand)]
 pub enum NerCommands {
     /// Install a supported NER backend locally
     Install {
@@ -93,6 +107,27 @@ pub enum NerCommands {
         /// Skip verifying that the backend imports after install
         #[arg(long)]
         no_verify: bool,
+    },
+    /// Start a supported NER backend sidecar locally
+    Start {
+        /// Backend to start
+        #[arg(long, value_enum, default_value_t = NerInstallBackend::GlinerPii)]
+        backend: NerInstallBackend,
+        /// Python interpreter to use (defaults to the managed venv when present)
+        #[arg(long)]
+        python: Option<String>,
+        /// Host to bind the sidecar to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to bind the sidecar to
+        #[arg(long, default_value_t = 9111)]
+        port: u16,
+        /// Confidence threshold passed to the sidecar
+        #[arg(long, default_value_t = 0.4)]
+        threshold: f64,
+        /// Print the launch command without running it
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -200,13 +235,28 @@ async fn main() -> anyhow::Result<()> {
         Commands::Stats => commands::stats(&cli.config).await,
         Commands::Init => commands::init().await,
         Commands::Setup => commands::setup().await,
+        Commands::Presets { action } => commands::presets(action).await,
         Commands::Mcp => commands::mcp(&cli.config).await,
         Commands::Tree { action } => commands::tree(&cli.config, action).await,
         Commands::Vector { action } => commands::vector(action).await,
         Commands::Sessions { action } => commands::sessions(&cli.config, action).await,
         Commands::Ner { action } => commands::ner(action).await,
-        Commands::Scan { input, output, strategy, detect_only, min_confidence } => {
-            commands::scan(&cli.config, input, output, strategy, detect_only, min_confidence).await
+        Commands::Scan {
+            input,
+            output,
+            strategy,
+            detect_only,
+            min_confidence,
+        } => {
+            commands::scan(
+                &cli.config,
+                input,
+                output,
+                strategy,
+                detect_only,
+                min_confidence,
+            )
+            .await
         }
     }
 }

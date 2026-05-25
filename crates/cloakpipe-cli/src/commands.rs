@@ -1,23 +1,62 @@
 //! CLI command implementations.
 
+use crate::presets::{
+    bundled_presets, install_bundled_presets, installed_preset_dir, resolve_installed_preset,
+    ResolvedPreset,
+};
 use anyhow::{bail, Context, Result};
 use cloakpipe_audit::AuditLogger;
 use cloakpipe_core::{
-    config::CloakPipeConfig,
-    detector::Detector,
-    replacer::Replacer,
-    vault::Vault,
+    config::CloakPipeConfig, detector::Detector, replacer::Replacer, vault::Vault,
 };
 use cloakpipe_proxy::{server, state::AppState};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 const GLINER_PIP_PACKAGE: &str = "gliner";
 const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
+const GLINER_VENV_DIR: &str = ".cloakpipe/gliner-pii-venv";
+const GLINER_SERVER_SCRIPT: &str = "tools/gliner-pii-server.py";
+
+enum ConfigSource {
+    Existing(PathBuf),
+    BundledPreset(ResolvedPreset),
+    Missing(PathBuf),
+}
 
 /// Load configuration from TOML file.
-fn load_config(path: &str) -> Result<CloakPipeConfig> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("Cannot read config: {}", path))?;
-    toml::from_str(&content).with_context(|| format!("Invalid config in: {}", path))
+fn load_config_file(path: &Path) -> Result<CloakPipeConfig> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot read config: {}", path.display()))?;
+    toml::from_str(&content).with_context(|| format!("Invalid config in: {}", path.display()))
+}
+
+fn resolve_config_path(config_path: &str) -> Result<ConfigSource> {
+    let path = PathBuf::from(config_path);
+    if path.exists() {
+        return Ok(ConfigSource::Existing(path));
+    }
+
+    if let Some(preset) = resolve_installed_preset(config_path)? {
+        return Ok(ConfigSource::BundledPreset(preset));
+    }
+
+    Ok(ConfigSource::Missing(path))
+}
+
+fn load_config(config_path: &str) -> Result<CloakPipeConfig> {
+    match resolve_config_path(config_path)? {
+        ConfigSource::Existing(path) | ConfigSource::Missing(path) => load_config_file(&path),
+        ConfigSource::BundledPreset(preset) => load_config_file(&preset.path),
+    }
+}
+
+fn load_config_or_default(config_path: &str) -> Result<CloakPipeConfig> {
+    match resolve_config_path(config_path)? {
+        ConfigSource::Existing(path) => load_config_file(&path),
+        ConfigSource::BundledPreset(preset) => load_config_file(&preset.path),
+        ConfigSource::Missing(_) => Ok(default_config()),
+    }
 }
 
 /// Resolve the vault encryption key from environment variable.
@@ -52,6 +91,21 @@ fn resolve_vault_key(config: &CloakPipeConfig) -> Result<Vec<u8>> {
     }
 }
 
+fn resolve_proxy_api_key(config: &CloakPipeConfig) -> Option<String> {
+    let env_var = config.proxy.api_key_env.as_str();
+
+    match std::env::var(env_var) {
+        Ok(api_key) if !api_key.trim().is_empty() => Some(api_key),
+        Ok(_) | Err(_) => {
+            tracing::warn!(
+                env_var = env_var,
+                "No upstream API key configured — direct privacy endpoints remain available, but chat, embeddings, and upstream-backed tree routes will return errors until the variable is set"
+            );
+            None
+        }
+    }
+}
+
 /// Simple hex decoder.
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {
     let hex = hex.trim();
@@ -69,21 +123,29 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
 
 /// Start the proxy server.
 pub async fn start(config_path: &str) -> Result<()> {
-    let config = if std::path::Path::new(config_path).exists() {
-        load_config(config_path)?
-    } else {
-        tracing::info!("No config found, creating {} with defaults", config_path);
-        let config = default_config();
-        let toml_str = toml::to_string_pretty(&config)?;
-        std::fs::write(config_path, toml_str)?;
-        config
+    let config = match resolve_config_path(config_path)? {
+        ConfigSource::Existing(path) => load_config_file(&path)?,
+        ConfigSource::BundledPreset(preset) => {
+            tracing::info!(
+                preset = preset.name,
+                path = %preset.path.display(),
+                "Using bundled preset"
+            );
+            load_config_file(&preset.path)?
+        }
+        ConfigSource::Missing(path) => {
+            tracing::info!("No config found, creating {} with defaults", path.display());
+            let config = default_config();
+            let toml_str = toml::to_string_pretty(&config)?;
+            std::fs::write(&path, toml_str)?;
+            config
+        }
     };
     let key = resolve_vault_key(&config)?;
     let detector = Detector::from_config(&config.detection)?;
     let vault = Vault::open(&config.vault.path, key)?;
     let audit = AuditLogger::new(&config.audit.log_path, config.audit.log_entities)?;
-    let api_key = std::env::var(config.proxy.api_key_env.as_str())
-        .with_context(|| format!("Set {} with your API key", config.proxy.api_key_env))?;
+    let api_key = resolve_proxy_api_key(&config);
 
     tracing::info!(
         listen = %config.proxy.listen,
@@ -99,8 +161,9 @@ pub async fn start(config_path: &str) -> Result<()> {
 pub async fn test(config_path: &str, text: Option<String>, file: Option<String>) -> Result<()> {
     let input = match (text, file) {
         (Some(t), _) => t,
-        (_, Some(f)) => std::fs::read_to_string(&f)
-            .with_context(|| format!("Cannot read file: {}", f))?,
+        (_, Some(f)) => {
+            std::fs::read_to_string(&f).with_context(|| format!("Cannot read file: {}", f))?
+        }
         (None, None) => {
             // Default sample text
             "Tata Motors reported revenue of $1.2M in Q3 2025. Contact: cfo@tatamotors.com. \
@@ -109,12 +172,7 @@ pub async fn test(config_path: &str, text: Option<String>, file: Option<String>)
         }
     };
 
-    let config = if std::path::Path::new(config_path).exists() {
-        load_config(config_path)?
-    } else {
-        tracing::info!("No config file found, using defaults");
-        default_config()
-    };
+    let config = load_config_or_default(config_path)?;
 
     let detector = Detector::from_config(&config.detection)?;
     let mut vault = Vault::ephemeral();
@@ -141,13 +199,13 @@ pub async fn test(config_path: &str, text: Option<String>, file: Option<String>)
     let rehydrated = cloakpipe_core::rehydrator::Rehydrator::rehydrate(&result.text, &vault)?;
     println!("\n--- Rehydrated ---");
     println!("{}", rehydrated.text);
-    println!(
-        "\n  Tokens rehydrated: {}",
-        rehydrated.rehydrated_count
-    );
+    println!("\n  Tokens rehydrated: {}", rehydrated.rehydrated_count);
 
     let roundtrip_ok = rehydrated.text == input;
-    println!("  Roundtrip match: {}", if roundtrip_ok { "YES" } else { "NO" });
+    println!(
+        "  Roundtrip match: {}",
+        if roundtrip_ok { "YES" } else { "NO" }
+    );
 
     Ok(())
 }
@@ -181,11 +239,51 @@ pub async fn init() -> Result<()> {
     let config = default_config();
     let toml_str = toml::to_string_pretty(&config)?;
     std::fs::write(path, toml_str)?;
+    let preset_dir = install_bundled_presets()?;
     println!("Created {}", path);
+    println!("Bundled presets installed in {}", preset_dir.display());
     println!("\nNext steps:");
     println!("  1. Set OPENAI_API_KEY (or your upstream API key)");
     println!("  2. Set CLOAKPIPE_VAULT_KEY (64-char hex string for encryption)");
     println!("  3. Run: cloakpipe start");
+    println!("  4. Or run a bundled preset directly: cloakpipe --config dpdp.toml start");
+
+    Ok(())
+}
+
+/// Bundled preset management commands.
+pub async fn presets(action: crate::PresetCommands) -> Result<()> {
+    match action {
+        crate::PresetCommands::Install => {
+            let preset_dir = install_bundled_presets()?;
+            println!("Bundled presets installed in {}", preset_dir.display());
+            for preset in bundled_presets() {
+                println!("  {} — {}", preset.file_name, preset.description);
+            }
+            println!("\nUse them with:");
+            println!("  cloakpipe --config dpdp.toml start");
+        }
+        crate::PresetCommands::List => {
+            let preset_dir = installed_preset_dir()?;
+            println!("Bundled presets:");
+            for preset in bundled_presets() {
+                let installed_path = preset_dir.join(preset.file_name);
+                let status = if installed_path.exists() {
+                    format!("installed at {}", installed_path.display())
+                } else {
+                    format!(
+                        "embedded; installs to {} on first use or via `cloakpipe presets install`",
+                        installed_path.display()
+                    )
+                };
+
+                println!(
+                    "  {} — {} ({})",
+                    preset.file_name, preset.description, status
+                );
+            }
+        }
+    }
 
     Ok(())
 }
@@ -193,7 +291,7 @@ pub async fn init() -> Result<()> {
 /// Interactive guided setup.
 pub async fn setup() -> Result<()> {
     use cloakpipe_core::profiles::IndustryProfile;
-    use dialoguer::{Select, Confirm};
+    use dialoguer::{Confirm, Select};
 
     println!("CloakPipe Setup\n");
 
@@ -229,7 +327,10 @@ pub async fn setup() -> Result<()> {
         .interact()?;
     let (upstream, api_key_env) = match upstream_idx {
         0 => ("https://api.openai.com".to_string(), "OPENAI_API_KEY"),
-        1 => ("https://YOUR_RESOURCE.openai.azure.com".to_string(), "AZURE_OPENAI_API_KEY"),
+        1 => (
+            "https://YOUR_RESOURCE.openai.azure.com".to_string(),
+            "AZURE_OPENAI_API_KEY",
+        ),
         2 => ("https://api.anthropic.com".to_string(), "ANTHROPIC_API_KEY"),
         3 => ("http://localhost:11434".to_string(), "OLLAMA_API_KEY"),
         _ => {
@@ -275,12 +376,15 @@ pub async fn setup() -> Result<()> {
     let path = "cloakpipe.toml";
     let toml_str = toml::to_string_pretty(&config)?;
     std::fs::write(path, &toml_str)?;
+    let preset_dir = install_bundled_presets()?;
 
     println!("\nCreated {} with profile: {}", path, profile);
+    println!("Bundled presets installed in {}", preset_dir.display());
     println!("\nNext steps:");
     println!("  1. Set {} (your API key)", api_key_env);
     println!("  2. Set CLOAKPIPE_VAULT_KEY=$(openssl rand -hex 32)");
     println!("  3. Run: cloakpipe start");
+    println!("  4. Or use a bundled preset: cloakpipe --config dpdp.toml start");
 
     Ok(())
 }
@@ -294,33 +398,43 @@ pub async fn ner(action: crate::NerCommands) -> Result<()> {
             python,
             no_verify,
         } => match backend {
+            crate::NerInstallBackend::GlinerPii => install_gliner_pii(python, dry_run, no_verify),
+        },
+        crate::NerCommands::Start {
+            backend,
+            python,
+            host,
+            port,
+            threshold,
+            dry_run,
+        } => match backend {
             crate::NerInstallBackend::GlinerPii => {
-                install_gliner_pii(python, dry_run, no_verify)
+                start_gliner_pii(python, host, port, threshold, dry_run)
             }
         },
     }
 }
 
-fn install_gliner_pii(
-    python: Option<String>,
-    dry_run: bool,
-    no_verify: bool,
-) -> Result<()> {
-    let python = match python {
+fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) -> Result<()> {
+    let python = PathBuf::from(match python {
         Some(python) => python,
         None if dry_run => "python3".to_string(),
         None => detect_python_interpreter()?,
-    };
+    });
+    let venv_dir = default_gliner_venv_dir();
 
     let install_args = ["-m", "pip", "install", GLINER_PIP_PACKAGE];
 
     if dry_run {
         println!("NER backend: gliner-pii");
-        println!(
-            "Would run: {}",
-            format_command(&python, &install_args)
-        );
-        print_gliner_next_steps(&python);
+        println!("Would run: {}", format_command(&python, &install_args));
+        let venv_dir_arg = path_arg(&venv_dir);
+        let venv_args = ["-m", "venv", venv_dir_arg.as_str()];
+        let venv_python = virtualenv_python_path(&venv_dir);
+        println!("If pip is blocked by PEP 668, CloakPipe will fall back to:");
+        println!("  {}", format_command(&python, &venv_args));
+        println!("  {}", format_command(&venv_python, &install_args));
+        print_gliner_next_steps();
         return Ok(());
     }
 
@@ -330,37 +444,109 @@ fn install_gliner_pii(
     let install_output = std::process::Command::new(&python)
         .args(install_args)
         .output()
-        .with_context(|| format!("Failed to launch {}", format_command(&python, &install_args)))?;
+        .with_context(|| {
+            format!(
+                "Failed to launch {}",
+                format_command(&python, &install_args)
+            )
+        })?;
 
-    if !install_output.status.success() {
+    let install_python = if install_output.status.success() {
+        python
+    } else if is_externally_managed_environment(&install_output) {
+        println!("Detected an externally managed Python environment.");
+        println!(
+            "Falling back to a local virtualenv at {}",
+            venv_dir.display()
+        );
+
+        let venv_python = ensure_virtualenv(&python, &venv_dir)?;
+        println!("  {}", format_command(&venv_python, &install_args));
+
+        let venv_install_output = std::process::Command::new(&venv_python)
+            .args(install_args)
+            .output()
+            .with_context(|| {
+                format!(
+                    "Failed to launch {}",
+                    format_command(&venv_python, &install_args)
+                )
+            })?;
+
+        if !venv_install_output.status.success() {
+            bail!(
+                "GLiNER install failed in the local virtualenv.\n{}",
+                render_process_output(&venv_install_output)
+            );
+        }
+
+        venv_python
+    } else {
         bail!(
             "GLiNER install failed.\n{}",
             render_process_output(&install_output)
         );
-    }
+    };
 
     if !no_verify {
-        let verify_args = ["-c", "from gliner import GLiNER; print('GLiNER import OK')"];
-        let verify_output = std::process::Command::new(&python)
-            .args(verify_args)
-            .output()
-            .with_context(|| format!("Failed to launch {}", format_command(&python, &verify_args)))?;
-
-        if !verify_output.status.success() {
-            bail!(
-                "Installed package but verification failed.\n{}",
-                render_process_output(&verify_output)
-            );
-        }
+        verify_gliner_import(&install_python)?;
     }
 
     println!("Installed {} successfully.", GLINER_PIP_PACKAGE);
     if no_verify {
         println!("Skipped import verification (--no-verify).");
     }
-    print_gliner_next_steps(&python);
+    print_gliner_next_steps();
 
     Ok(())
+}
+
+fn start_gliner_pii(
+    python: Option<String>,
+    host: String,
+    port: u16,
+    threshold: f64,
+    dry_run: bool,
+) -> Result<()> {
+    let current_dir = std::env::current_dir().context("Cannot determine current directory")?;
+    let project_root = find_gliner_project_root(&current_dir)?;
+    let script_path = project_root.join(GLINER_SERVER_SCRIPT);
+    let python = resolve_gliner_start_python(python, &project_root, dry_run)?;
+
+    let args = vec![
+        path_arg(&script_path),
+        "--host".to_string(),
+        host,
+        "--port".to_string(),
+        port.to_string(),
+        "--threshold".to_string(),
+        threshold.to_string(),
+    ];
+
+    println!("Starting GLiNER-PII sidecar...");
+    println!("  {}", format_command(&python, &args));
+
+    if dry_run {
+        return Ok(());
+    }
+
+    ensure_gliner_import_available(&python)?;
+
+    let status = std::process::Command::new(&python)
+        .args(&args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .with_context(|| format!("Failed to launch {}", format_command(&python, &args)))?;
+
+    if status.success() {
+        Ok(())
+    } else if let Some(code) = status.code() {
+        bail!("GLiNER-PII sidecar exited with status code {}", code)
+    } else {
+        bail!("GLiNER-PII sidecar terminated before exiting cleanly")
+    }
 }
 
 fn detect_python_interpreter() -> Result<String> {
@@ -370,9 +556,7 @@ fn detect_python_interpreter() -> Result<String> {
         }
     }
 
-    bail!(
-        "No Python interpreter found. Install Python 3 or rerun with --python <path>."
-    )
+    bail!("No Python interpreter found. Install Python 3 or rerun with --python <path>.")
 }
 
 fn command_available(command: &str) -> bool {
@@ -381,6 +565,152 @@ fn command_available(command: &str) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn default_gliner_venv_dir() -> PathBuf {
+    PathBuf::from(GLINER_VENV_DIR)
+}
+
+fn gliner_venv_dir(project_root: &Path) -> PathBuf {
+    project_root.join(GLINER_VENV_DIR)
+}
+
+fn find_gliner_project_root(start_dir: &Path) -> Result<PathBuf> {
+    for dir in start_dir.ancestors() {
+        if dir.join(GLINER_SERVER_SCRIPT).exists() {
+            return Ok(dir.to_path_buf());
+        }
+    }
+
+    bail!(
+        "Could not find {} from {} or any parent directory. Run this command from a CloakPipe checkout.",
+        GLINER_SERVER_SCRIPT,
+        start_dir.display()
+    )
+}
+
+fn resolve_gliner_start_python(
+    python: Option<String>,
+    project_root: &Path,
+    dry_run: bool,
+) -> Result<PathBuf> {
+    if let Some(python) = python {
+        return Ok(PathBuf::from(python));
+    }
+
+    let managed_python = virtualenv_python_path(&gliner_venv_dir(project_root));
+    if managed_python.exists() {
+        return Ok(managed_python);
+    }
+
+    if dry_run {
+        return Ok(PathBuf::from("python3"));
+    }
+
+    Ok(PathBuf::from(detect_python_interpreter()?))
+}
+
+fn ensure_virtualenv(base_python: &Path, venv_dir: &Path) -> Result<PathBuf> {
+    let venv_python = virtualenv_python_path(venv_dir);
+    if venv_python.exists() {
+        return Ok(venv_python);
+    }
+
+    if let Some(parent) = venv_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Cannot create runtime directory: {}", parent.display()))?;
+    }
+
+    let venv_dir_arg = path_arg(venv_dir);
+    let venv_args = ["-m", "venv", venv_dir_arg.as_str()];
+    println!("  {}", format_command(base_python, &venv_args));
+
+    let create_output = std::process::Command::new(base_python)
+        .args(venv_args)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to launch {}",
+                format_command(base_python, &venv_args)
+            )
+        })?;
+
+    if !create_output.status.success() {
+        bail!(
+            "Failed to create a local GLiNER virtualenv.\n{}",
+            render_process_output(&create_output)
+        );
+    }
+
+    if !venv_python.exists() {
+        bail!(
+            "Created virtualenv at {}, but no Python interpreter was found at {}.",
+            venv_dir.display(),
+            venv_python.display()
+        );
+    }
+
+    Ok(venv_python)
+}
+
+fn verify_gliner_import(python: &Path) -> Result<()> {
+    let verify_output = gliner_import_check(python)?;
+
+    if !verify_output.status.success() {
+        bail!(
+            "Installed package but verification failed.\n{}",
+            render_process_output(&verify_output)
+        );
+    }
+
+    Ok(())
+}
+
+fn ensure_gliner_import_available(python: &Path) -> Result<()> {
+    let verify_output = gliner_import_check(python)?;
+
+    if !verify_output.status.success() {
+        bail!(
+            "Python at {} cannot import gliner. Run `cloakpipe ner install` first or pass --python <path>.\n{}",
+            python.display(),
+            render_process_output(&verify_output)
+        );
+    }
+
+    Ok(())
+}
+
+fn gliner_import_check(python: &Path) -> Result<std::process::Output> {
+    let verify_args = ["-c", "from gliner import GLiNER; print('GLiNER import OK')"];
+    std::process::Command::new(python)
+        .args(verify_args)
+        .output()
+        .with_context(|| format!("Failed to launch {}", format_command(python, &verify_args)))
+}
+
+fn virtualenv_python_path(venv_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        venv_dir.join("Scripts").join("python.exe")
+    }
+
+    #[cfg(not(windows))]
+    {
+        venv_dir.join("bin").join("python")
+    }
+}
+
+fn is_externally_managed_environment(output: &std::process::Output) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_ascii_lowercase();
+
+    combined.contains("externally-managed-environment")
+        || combined.contains("externally managed")
+        || combined.contains("pep 668")
 }
 
 fn render_process_output(output: &std::process::Output) -> String {
@@ -395,12 +725,20 @@ fn render_process_output(output: &std::process::Output) -> String {
     }
 }
 
-fn format_command(command: &str, args: &[&str]) -> String {
-    std::iter::once(command)
-        .chain(args.iter().copied())
-        .map(format_cli_arg)
+fn format_command<S: AsRef<str>>(command: &Path, args: &[S]) -> String {
+    let mut parts = Vec::with_capacity(args.len() + 1);
+    parts.push(path_arg(command));
+    parts.extend(args.iter().map(|arg| arg.as_ref().to_string()));
+
+    parts
+        .iter()
+        .map(|arg| format_cli_arg(arg))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn path_arg(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn format_cli_arg(arg: &str) -> String {
@@ -411,12 +749,9 @@ fn format_cli_arg(arg: &str) -> String {
     }
 }
 
-fn print_gliner_next_steps(python: &str) {
+fn print_gliner_next_steps() {
     println!("\nNext steps:");
-    println!(
-        "  1. Start the sidecar: {} tools/gliner-pii-server.py",
-        format_cli_arg(python)
-    );
+    println!("  1. Start the sidecar: cloakpipe ner start");
     println!("  2. Enable this in cloakpipe.toml:");
     println!("     [detection.ner]");
     println!("     enabled = true");
@@ -425,14 +760,58 @@ fn print_gliner_next_steps(python: &str) {
     println!("     confidence_threshold = 0.4");
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+
+    #[test]
+    fn detects_externally_managed_python_errors() {
+        let output = std::process::Output {
+            status: failure_status(),
+            stdout: Vec::new(),
+            stderr: b"error: externally-managed-environment".to_vec(),
+        };
+
+        assert!(is_externally_managed_environment(&output));
+    }
+
+    #[test]
+    fn default_gliner_venv_dir_is_project_local() {
+        assert_eq!(
+            default_gliner_venv_dir(),
+            PathBuf::from(".cloakpipe/gliner-pii-venv")
+        );
+    }
+
+    #[test]
+    fn gliner_venv_dir_is_relative_to_project_root() {
+        assert_eq!(
+            gliner_venv_dir(Path::new("/tmp/cloakpipe")),
+            PathBuf::from("/tmp/cloakpipe/.cloakpipe/gliner-pii-venv")
+        );
+    }
+
+    fn failure_status() -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            std::process::ExitStatus::from_raw(1)
+        }
+
+        #[cfg(windows)]
+        {
+            std::process::ExitStatus::from_raw(1)
+        }
+    }
+}
+
 /// Start as MCP server (stdio transport).
 pub async fn mcp(config_path: &str) -> Result<()> {
-    let config = if std::path::Path::new(config_path).exists() {
-        load_config(config_path)?
-    } else {
-        tracing::info!("No config file found, using defaults");
-        default_config()
-    };
+    let config = load_config_or_default(config_path)?;
 
     let key = resolve_vault_key(&config)?;
     let vault = cloakpipe_core::vault::Vault::open(&config.vault.path, key)?;
@@ -443,12 +822,7 @@ pub async fn mcp(config_path: &str) -> Result<()> {
 
 /// CloakTree commands — vectorless document retrieval.
 pub async fn tree(config_path: &str, action: crate::TreeCommands) -> Result<()> {
-    let config = if std::path::Path::new(config_path).exists() {
-        load_config(config_path)?
-    } else {
-        tracing::info!("No config file found, using defaults");
-        default_config()
-    };
+    let config = load_config_or_default(config_path)?;
 
     let tree_config = &config.tree;
 
@@ -460,17 +834,12 @@ pub async fn tree(config_path: &str, action: crate::TreeCommands) -> Result<()> 
                 tc.add_node_summaries = false;
             }
 
-            let indexer = cloakpipe_tree::TreeIndexer::new(
-                tc,
-                api_key,
-                config.proxy.upstream.clone(),
-            );
+            let indexer =
+                cloakpipe_tree::TreeIndexer::new(tc, api_key, config.proxy.upstream.clone());
 
             let tree_index = indexer.build_index(&file).await?;
-            let path = cloakpipe_tree::storage::TreeStorage::save(
-                &tree_index,
-                &tree_config.storage_path,
-            )?;
+            let path =
+                cloakpipe_tree::storage::TreeStorage::save(&tree_index, &tree_config.storage_path)?;
 
             println!("Tree index created:");
             println!("  ID:     {}", tree_index.id);
@@ -505,7 +874,10 @@ pub async fn tree(config_path: &str, action: crate::TreeCommands) -> Result<()> 
             println!("  Matching nodes:");
             for id in &result.node_ids {
                 if let Some(node) = tree_index.find_node(id) {
-                    println!("    [{}] {} (pages {}-{})", id, node.title, node.pages.0, node.pages.1);
+                    println!(
+                        "    [{}] {} (pages {}-{})",
+                        id, node.title, node.pages.0, node.pages.1
+                    );
                     if let Some(summary) = &node.summary {
                         println!("          {}", summary.text);
                     }
@@ -593,7 +965,10 @@ pub async fn tree(config_path: &str, action: crate::TreeCommands) -> Result<()> 
                 "temperature": 0.3
             });
 
-            let url = format!("{}/v1/chat/completions", config.proxy.upstream.trim_end_matches('/'));
+            let url = format!(
+                "{}/v1/chat/completions",
+                config.proxy.upstream.trim_end_matches('/')
+            );
             let client = reqwest::Client::new();
             let response = client
                 .post(&url)
@@ -611,7 +986,10 @@ pub async fn tree(config_path: &str, action: crate::TreeCommands) -> Result<()> 
             println!("Question: {}\n", question);
             println!("Sources ({}):", result.node_ids.len());
             for c in &content {
-                println!("  [{}] {} (pages {}-{})", c.node_id, c.title, c.pages.0, c.pages.1);
+                println!(
+                    "  [{}] {} (pages {}-{})",
+                    c.node_id, c.title, c.pages.0, c.pages.1
+                );
             }
             println!("\nAnswer:\n{}", answer);
         }
@@ -644,7 +1022,10 @@ pub async fn vector(action: crate::VectorCommands) -> Result<()> {
     match action {
         crate::VectorCommands::Encrypt { input, output, dim } => {
             let key = resolve_vector_key()?;
-            let config = cloakpipe_vector::AdcpeConfig { dimensions: dim, noise_scale: 0.0 };
+            let config = cloakpipe_vector::AdcpeConfig {
+                dimensions: dim,
+                noise_scale: 0.0,
+            };
             let mut enc = cloakpipe_vector::AdcpeEncryptor::new(&key, &config)?;
 
             let data = std::fs::read_to_string(&input)
@@ -656,12 +1037,20 @@ pub async fn vector(action: crate::VectorCommands) -> Result<()> {
             let json = serde_json::to_string_pretty(&encrypted)?;
             std::fs::write(&output, json)?;
 
-            println!("Encrypted {} vectors (dim={}) -> {}", vectors.len(), dim, output);
+            println!(
+                "Encrypted {} vectors (dim={}) -> {}",
+                vectors.len(),
+                dim,
+                output
+            );
         }
 
         crate::VectorCommands::Decrypt { input, output, dim } => {
             let key = resolve_vector_key()?;
-            let config = cloakpipe_vector::AdcpeConfig { dimensions: dim, noise_scale: 0.0 };
+            let config = cloakpipe_vector::AdcpeConfig {
+                dimensions: dim,
+                noise_scale: 0.0,
+            };
             let enc = cloakpipe_vector::AdcpeEncryptor::new(&key, &config)?;
 
             let data = std::fs::read_to_string(&input)
@@ -673,12 +1062,20 @@ pub async fn vector(action: crate::VectorCommands) -> Result<()> {
             let json = serde_json::to_string_pretty(&decrypted)?;
             std::fs::write(&output, json)?;
 
-            println!("Decrypted {} vectors (dim={}) -> {}", encrypted.len(), dim, output);
+            println!(
+                "Decrypted {} vectors (dim={}) -> {}",
+                encrypted.len(),
+                dim,
+                output
+            );
         }
 
         crate::VectorCommands::Test { dim } => {
             let key = resolve_vector_key()?;
-            let config = cloakpipe_vector::AdcpeConfig { dimensions: dim, noise_scale: 0.0 };
+            let config = cloakpipe_vector::AdcpeConfig {
+                dimensions: dim,
+                noise_scale: 0.0,
+            };
             let mut enc = cloakpipe_vector::AdcpeEncryptor::new(&key, &config)?;
 
             // Generate sample vectors
@@ -694,16 +1091,28 @@ pub async fn vector(action: crate::VectorCommands) -> Result<()> {
             let cos_enc = cloakpipe_vector::adcpe::cosine_similarity(&ea, &eb);
 
             let da = enc.decrypt(&ea)?;
-            let max_err: f64 = a.iter().zip(da.iter())
+            let max_err: f64 = a
+                .iter()
+                .zip(da.iter())
                 .map(|(x, y)| (x - y).abs())
                 .fold(0.0, f64::max);
 
             println!("ADCPE Test (dim={})", dim);
             println!("  Cosine similarity (original):  {:.6}", cos_orig);
             println!("  Cosine similarity (encrypted): {:.6}", cos_enc);
-            println!("  Distance preserved: {}", if (cos_orig - cos_enc).abs() < 1e-10 { "YES" } else { "NO" });
+            println!(
+                "  Distance preserved: {}",
+                if (cos_orig - cos_enc).abs() < 1e-10 {
+                    "YES"
+                } else {
+                    "NO"
+                }
+            );
             println!("  Roundtrip max error: {:.2e}", max_err);
-            println!("  Roundtrip exact: {}", if max_err < 1e-10 { "YES" } else { "NO" });
+            println!(
+                "  Roundtrip exact: {}",
+                if max_err < 1e-10 { "YES" } else { "NO" }
+            );
         }
     }
 
@@ -782,11 +1191,7 @@ pub async fn scan(
     detect_only: bool,
     min_confidence: f64,
 ) -> Result<()> {
-    let config = if std::path::Path::new(config_path).exists() {
-        load_config(config_path)?
-    } else {
-        default_config()
-    };
+    let config = load_config_or_default(config_path)?;
 
     let detector = Detector::from_config(&config.detection)?;
     let masking_strategy = match strategy.as_str() {
@@ -905,7 +1310,9 @@ pub async fn scan(
 
 /// Collect scannable text files from a path (file or directory).
 fn collect_scannable_files(path: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
-    let extensions = ["txt", "md", "json", "csv", "toml", "yaml", "yml", "xml", "html"];
+    let extensions = [
+        "txt", "md", "json", "csv", "toml", "yaml", "yml", "xml", "html",
+    ];
 
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
@@ -942,11 +1349,7 @@ fn collect_files_recursive(
 
 /// Session management commands — talks to the running proxy's HTTP API.
 pub async fn sessions(config_path: &str, action: crate::SessionCommands) -> Result<()> {
-    let config = if std::path::Path::new(config_path).exists() {
-        load_config(config_path)?
-    } else {
-        default_config()
-    };
+    let config = load_config_or_default(config_path)?;
 
     let base = format!("http://{}", config.proxy.listen);
     let client = reqwest::Client::new();
@@ -996,7 +1399,10 @@ pub async fn sessions(config_path: &str, action: crate::SessionCommands) -> Resu
             println!("  Messages:      {}", stats["message_count"]);
             println!("  Entities:      {}", stats["entity_count"]);
             println!("  Coreferences:  {}", stats["coreference_count"]);
-            println!("  Sensitivity:   {}", stats["sensitivity"].as_str().unwrap_or("normal"));
+            println!(
+                "  Sensitivity:   {}",
+                stats["sensitivity"].as_str().unwrap_or("normal")
+            );
             if let Some(keywords) = stats["escalation_keywords"].as_array() {
                 if !keywords.is_empty() {
                     let kw: Vec<&str> = keywords.iter().filter_map(|k| k.as_str()).collect();
@@ -1009,8 +1415,14 @@ pub async fn sessions(config_path: &str, action: crate::SessionCommands) -> Resu
                     println!("    {}: {}", cat, count);
                 }
             }
-            println!("  Created:       {}", stats["created_at"].as_str().unwrap_or("?"));
-            println!("  Last activity: {}", stats["last_activity"].as_str().unwrap_or("?"));
+            println!(
+                "  Created:       {}",
+                stats["created_at"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Last activity: {}",
+                stats["last_activity"].as_str().unwrap_or("?")
+            );
         }
 
         crate::SessionCommands::Flush { session_id } => {

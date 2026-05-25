@@ -31,5 +31,6 @@ models/
 
 # Claude session data
 .claude/
+.cloakpipe/
 .reflect/
 .hypergrep/

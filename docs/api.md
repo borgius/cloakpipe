@@ -31,6 +31,17 @@ Examples:
 - `OLLAMA_API_KEY`
 - `AZURE_OPENAI_API_KEY`
 
+The server can still start if this variable is missing. In that mode, the direct privacy routes remain available:
+
+- `/v1/pseudonymize`
+- `/v1/rehydrate`
+- `/v1/detect`
+- `/v1/vault_stats`
+- `/v1/configure`
+- `/v1/session_context`
+
+LLM-backed routes such as `/v1/chat/completions`, `/v1/embeddings`, and tree routes that call the upstream model return `503 Service Unavailable` until the variable is set.
+
 The client does **not** need to supply the real upstream provider key to CloakPipe. The current implementation ignores the inbound `Authorization` header and always sends the server-side key configured in the process environment.
 
 That means:
@@ -78,6 +89,12 @@ If you are building a client, treat error bodies as opaque text unless you know 
 | Path | Method | Purpose |
 | --- | --- | --- |
 | `/health` | `GET` | Liveness check |
+| `/v1/pseudonymize` or `/pseudonymize` | `POST` | Direct MCP-style text pseudonymization |
+| `/v1/rehydrate` or `/rehydrate` | `POST` | Direct MCP-style token rehydration |
+| `/v1/detect` or `/detect` | `POST` | Direct MCP-style dry-run detection |
+| `/v1/vault_stats` or `/vault_stats` | `GET`, `POST` | Direct MCP-style vault stats |
+| `/v1/configure` or `/configure` | `POST` | Direct MCP-style detector reconfiguration |
+| `/v1/session_context` or `/session_context` | `POST` | Direct MCP-style session inspection |
 | `/v1/chat/completions` | `POST` | Pseudonymize chat input, proxy upstream, then rehydrate the response |
 | `/v1/embeddings` | `POST` | Pseudonymize embedding input, proxy upstream |
 | `/tree/index` | `POST` | Build and save a tree index from raw text |
@@ -284,6 +301,196 @@ Embeddings response example:
   "model": "text-embedding-3-small"
 }
 ```
+
+## Direct privacy tool endpoints
+
+These routes mirror the six MCP tools over HTTP.
+
+Two practical notes:
+
+- The canonical API paths are under `/v1/...`, and each one also has a root-level alias such as `/pseudonymize`.
+- Success responses are normal JSON objects, not JSON serialized into text like the stdio MCP transport.
+
+### `POST /v1/pseudonymize`
+
+Also available at `POST /pseudonymize`.
+
+Request body:
+
+```json
+{
+  "text": "Send $500 to alice@example.com before June 1, 2026."
+}
+```
+
+Success response:
+
+```json
+{
+  "text": "Send AMOUNT_1 to EMAIL_1 before DATE_1.",
+  "entities_detected": 3,
+  "categories": ["Amount", "Date", "Email"]
+}
+```
+
+This endpoint mirrors the MCP `pseudonymize` tool: it accepts only `text`, always uses token masking, and does not take a `session_id` in the request body.
+
+### `POST /v1/rehydrate`
+
+Also available at `POST /rehydrate`.
+
+Request body:
+
+```json
+{
+  "text": "Send AMOUNT_1 to EMAIL_1 before DATE_1."
+}
+```
+
+Success response:
+
+```json
+{
+  "text": "Send $500 to alice@example.com before June 1, 2026.",
+  "tokens_rehydrated": 3
+}
+```
+
+Unknown tokens are left unchanged, just like the MCP tool.
+
+### `POST /v1/detect`
+
+Also available at `POST /detect`.
+
+Request body:
+
+```json
+{
+  "text": "Send $500 to alice@example.com before June 1, 2026."
+}
+```
+
+Success response:
+
+```json
+{
+  "entities": [
+    {
+      "original": "alice@example.com",
+      "category": "Email",
+      "confidence": 1.0,
+      "source": "Pattern"
+    },
+    {
+      "original": "$500",
+      "category": "Amount",
+      "confidence": 1.0,
+      "source": "Financial"
+    }
+  ]
+}
+```
+
+Like the MCP tool, this returns raw sensitive substrings in `original`, so use it for review and debugging rather than privacy-preserving outbound traffic.
+
+### `GET` or `POST /v1/vault_stats`
+
+Also available at `GET` or `POST /vault_stats`.
+
+This endpoint takes no parameters and returns safe aggregate stats for the active vault state:
+
+```json
+{
+  "total_mappings": 4,
+  "categories": {
+    "AMOUNT": 1,
+    "EMAIL": 2,
+    "PERSON": 1
+  }
+}
+```
+
+### `POST /v1/configure`
+
+Also available at `POST /configure`.
+
+Request body fields match the MCP tool:
+
+- `profile` (`string | null`)
+- `enable` (`string[] | null`)
+- `disable` (`string[] | null`)
+
+Example request:
+
+```json
+{
+  "profile": "legal",
+  "enable": ["ip_addresses"]
+}
+```
+
+Success response:
+
+```json
+{
+  "active_profile": "legal",
+  "secrets": true,
+  "financial": true,
+  "dates": true,
+  "emails": true,
+  "phone_numbers": true,
+  "ip_addresses": true
+}
+```
+
+The server applies profile changes first, then `enable`, then `disable`, and rebuilds the detector immediately for future `detect`, `pseudonymize`, chat, and embeddings requests.
+
+### `POST /v1/session_context`
+
+Also available at `POST /session_context`.
+
+Request body:
+
+```json
+{
+  "session_id": "list"
+}
+```
+
+If sessions exist, the response matches the MCP tool shape:
+
+```json
+{
+  "sessions": [
+    {
+      "session_id": "session-123",
+      "message_count": 2,
+      "entity_count": 5,
+      "coreference_count": 3,
+      "sensitivity": "normal",
+      "escalation_keywords": [],
+      "categories": {
+        "Person": 2,
+        "Organization": 1,
+        "Amount": 2
+      },
+      "created_at": "2026-05-24T12:00:00+00:00",
+      "last_activity": "2026-05-24T12:05:00+00:00"
+    }
+  ],
+  "total": 1
+}
+```
+
+If the requested session does not exist, the endpoint returns a JSON body like:
+
+```json
+{
+  "error": "Session 'session-123' not found"
+}
+```
+
+This endpoint only inspects session state. It does not create sessions by itself; session creation still happens through the chat proxy path when session tracking is enabled and requests include the configured session header.
 
 ## Tree endpoints
 

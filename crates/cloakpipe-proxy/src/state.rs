@@ -2,22 +2,24 @@
 
 use cloakpipe_audit::AuditLogger;
 use cloakpipe_core::{
-    config::CloakPipeConfig,
+    config::{CloakPipeConfig, DetectionConfig},
     detector::Detector,
     session::SessionManager,
     vault::Vault,
 };
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 /// Shared state accessible from all request handlers.
 pub struct AppState {
     pub config: CloakPipeConfig,
-    pub detector: Detector,
+    pub detector: Arc<RwLock<Detector>>,
+    pub detection_config: Arc<RwLock<DetectionConfig>>,
+    pub active_profile: Arc<RwLock<Option<String>>>,
     pub vault: Arc<Mutex<Vault>>,
     pub audit: AuditLogger,
     pub http_client: reqwest::Client,
-    pub api_key: String,
+    pub api_key: Option<String>,
     pub sessions: Arc<SessionManager>,
 }
 
@@ -27,8 +29,10 @@ impl AppState {
         detector: Detector,
         vault: Vault,
         audit: AuditLogger,
-        api_key: String,
+        api_key: Option<String>,
     ) -> Self {
+        let detection_config = config.detection.clone();
+        let active_profile = config.profile.clone();
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.proxy.timeout_seconds))
             .build()
@@ -38,12 +42,24 @@ impl AppState {
 
         Self {
             config,
-            detector,
+            detector: Arc::new(RwLock::new(detector)),
+            detection_config: Arc::new(RwLock::new(detection_config)),
+            active_profile: Arc::new(RwLock::new(active_profile)),
             vault: Arc::new(Mutex::new(vault)),
             audit,
             http_client,
             api_key,
             sessions,
         }
+    }
+
+    /// Return the configured upstream API key, if present.
+    pub fn upstream_api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+
+    /// Return the standard missing-key message for upstream-backed routes.
+    pub fn missing_api_key_message(&self) -> String {
+        format!("Set {} with your API key", self.config.proxy.api_key_env)
     }
 }

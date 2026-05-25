@@ -1,0 +1,52 @@
+# CloakPipe policy preset: Minimal
+# Lowest-noise bundled preset: high-confidence structured identifiers only.
+# Leaves NER off, disables generic financial/date masking, and keeps only
+# strongly structured regex categories plus a small set of explicit custom IDs.
+
+[proxy]
+listen = "127.0.0.1:8400"
+upstream = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 120
+max_concurrent = 256
+mode = "proxy"
+masking_strategy = "token"
+
+[vault]
+path = "./vault.enc"
+encryption = "aes-256-gcm"
+key_env = "CLOAKPIPE_VAULT_KEY"
+backend = "file"
+
+[detection]
+secrets = true
+financial = false
+dates = false
+emails = true
+phone_numbers = true
+ip_addresses = false
+urls_internal = false
+
+[detection.ner]
+enabled = false
+backend = "distilbert_pii"
+confidence_threshold = 0.70
+# model = "models/distilbert-pii/quantized/model_quantized.onnx"
+
+[detection.custom]
+patterns = [
+  { name = "upi_id", regex = "\\b[A-Za-z0-9._-]{2,}@[A-Za-z][A-Za-z0-9._-]{1,63}\\b", category = "UPI_ID" },
+  { name = "gstin", regex = "\\b\\d{2}[A-Z]{5}\\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\\b", category = "GSTIN" },
+]
+
+[detection.overrides]
+preserve = []
+force = []
+
+[audit]
+enabled = true
+log_path = "./audit/"
+format = "jsonl"
+retention_days = 90
+log_entities = true
+log_mappings = false

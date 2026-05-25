@@ -82,7 +82,7 @@ impl Detector {
                 } else {
                     tracing::warn!(
                         "GLiNER-PII sidecar not reachable at {}. NER layer disabled. \
-                         Start with: python tools/gliner-pii-server.py",
+                         Start with: cloakpipe ner start",
                         config.ner.sidecar_url
                     );
                     None
