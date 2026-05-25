@@ -1151,7 +1151,7 @@ fn default_config() -> CloakPipeConfig {
             timeout_seconds: 120,
             max_concurrent: 256,
             mode: "proxy".into(),
-            masking_strategy: cloakpipe_core::MaskingStrategy::Token,
+            masking_strategy: cloakpipe_core::MaskingStrategy::default(),
         },
         vault: cloakpipe_core::config::VaultConfig {
             path: "./vault.enc".into(),
@@ -1195,8 +1195,10 @@ pub async fn scan(
 
     let detector = Detector::from_config(&config.detection)?;
     let masking_strategy = match strategy.as_str() {
+        "similar" | "similar-values" | "sv" => cloakpipe_core::MaskingStrategy::Similar,
         "format-preserving" | "fp" => cloakpipe_core::MaskingStrategy::FormatPreserving,
-        _ => cloakpipe_core::MaskingStrategy::Token,
+        "token" => cloakpipe_core::MaskingStrategy::Token,
+        _ => cloakpipe_core::MaskingStrategy::default(),
     };
 
     let input_path = std::path::Path::new(&input);

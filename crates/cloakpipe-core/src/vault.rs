@@ -208,6 +208,48 @@ impl Vault {
         token
     }
 
+    /// Get or create a plausible similar-value pseudo-token for the given original value.
+    pub fn get_or_create_similar(&mut self, original: &str, category: &EntityCategory) -> PseudoToken {
+        if let Some(token) = self.forward.get(original) {
+            return token.clone();
+        }
+
+        if let Some(ref resolver) = self.resolver {
+            let existing: HashMap<String, EntityCategory> = self
+                .forward
+                .iter()
+                .map(|(k, v)| (k.clone(), v.category.clone()))
+                .collect();
+            if let Some(canonical) = resolver.resolve(original, category, &existing) {
+                if let Some(token) = self.forward.get(&canonical) {
+                    let token = token.clone();
+                    self.forward.insert(original.to_string(), token.clone());
+                    return token;
+                }
+            }
+        }
+
+        let prefix = Self::category_prefix(category);
+        let counter = self.counters.entry(prefix).or_insert(0);
+        *counter += 1;
+        let id = *counter;
+
+        let fake = crate::format_preserving::generate_similar(original, category, id);
+        let token = PseudoToken {
+            token: fake,
+            category: category.clone(),
+            id,
+        };
+
+        self.forward.insert(original.to_string(), token.clone());
+        self.reverse.insert(
+            token.token.clone(),
+            SensitiveString(original.to_string()),
+        );
+
+        token
+    }
+
     /// Check if a given original value already has a mapping in the vault.
     pub fn contains_original(&self, value: &str) -> bool {
         self.forward.contains_key(value)
@@ -499,5 +541,14 @@ mod tests {
         let t = vault.get_or_create_fp("priya@example.com", &EntityCategory::Email);
         assert!(t.token.contains("@"), "FP email should contain @");
         assert!(t.token.ends_with(".invalid"), "FP email should use .invalid TLD");
+    }
+
+    #[test]
+    fn test_vault_similar_email() {
+        let mut vault = Vault::ephemeral();
+        let t = vault.get_or_create_similar("lee.taylor56789@aol.com", &EntityCategory::Email);
+        assert!(t.token.contains('@'), "Similar email should contain @");
+        assert_ne!(t.token, "lee.taylor56789@aol.com");
+        assert_eq!(vault.lookup(&t.token), Some("lee.taylor56789@aol.com"));
     }
 }

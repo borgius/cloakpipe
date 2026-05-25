@@ -167,11 +167,13 @@ Masked Output (total: <20ms on any laptop CPU)
 | BERT NER | `bert` | ~400MB | 20-40ms | Any CPU | Legacy 4-type NER (PER/ORG/LOC/MISC) |
 | GLiNER2 | `gliner` | ~800MB | 50ms | Any CPU | Legacy zero-shot NER |
 
-### Tokenization
+### Similar-value pseudonymization
 
-Tokens are **deterministic within a session** — the same entity always maps to the same token. This means the LLM maintains coherence across the conversation.
+By default, sensitive values are replaced with **similar fake values** — emails stay email-shaped, phone numbers stay phone-shaped, and secrets keep recognizable prefixes without exposing the original value.
 
-Tokens are **non-deterministic across sessions** — the same entity maps to a different token in a new session, preventing cross-session correlation.
+Mappings are **deterministic within a session** — the same entity always maps to the same fake value. This means the LLM maintains coherence across the conversation.
+
+Mappings are **non-deterministic across sessions** — the same entity maps to a different fake value in a new session, preventing cross-session correlation.
 
 ### Encrypted Vault
 
@@ -312,9 +314,9 @@ cloakpipe scan "Dr. Rajesh Singh, Aadhaar 2345 6789 0123"
 # ✓ PERSON: "Dr. Rajesh Singh" (confidence: 0.97)
 # ✓ AADHAAR: "2345 6789 0123" (confidence: 1.00)
 
-# Mask text (replace PII with tokens)
+# Mask text (replace PII with similar fake values by default)
 cloakpipe mask "Contact Priya at priya@example.com or +91 98765 43210"
-# Output: "Contact PERSON_001 at EMAIL_001 or PHONE_001"
+# Output: "Contact PERSON_001 at chris.hall@gmail.com or +91 464 316 6112"
 
 # Start the proxy server
 cloakpipe serve --port 3100
@@ -466,7 +468,7 @@ Tested on 4 cross-domain scenarios (Slack threads, invoice emails, medical notes
 
 ### Response Quality
 
-Both protected and unprotected LLM calls produce coherent, usable responses. The LLM treats pseudo-tokens (PERSON_1, EMAIL_1) as placeholders and generates appropriate text. Rehydration restores all original data with perfect roundtrip fidelity.
+Both protected and unprotected LLM calls produce coherent, usable responses. The LLM sees similar fake values instead of raw sensitive data, preserving value structure for better reasoning. Rehydration restores all original data with perfect roundtrip fidelity.
 
 ### Latency
 

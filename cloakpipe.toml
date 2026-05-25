@@ -7,7 +7,7 @@ api_key_env = "OLLAMA_API_KEY"
 timeout_seconds = 120
 max_concurrent = 256
 mode = "proxy"
-masking_strategy = "token"
+masking_strategy = "similar"
 
 [vault]
 path = "./vault.enc"

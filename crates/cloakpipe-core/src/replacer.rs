@@ -81,6 +81,37 @@ impl Replacer {
         })
     }
 
+    /// Replace entities using plausible fake values that resemble the originals.
+    pub fn pseudonymize_similar(
+        text: &str,
+        entities: &[DetectedEntity],
+        vault: &mut Vault,
+    ) -> Result<PseudonymizedText> {
+        let mut result = String::with_capacity(text.len());
+        let mut mappings = HashMap::new();
+        let mut last_end = 0;
+
+        for entity in entities {
+            if entity.start > last_end {
+                result.push_str(&text[last_end..entity.start]);
+            }
+            let token = vault.get_or_create_similar(&entity.original, &entity.category);
+            mappings.insert(token.token.clone(), entity.original.clone());
+            result.push_str(&token.token);
+            last_end = entity.end;
+        }
+
+        if last_end < text.len() {
+            result.push_str(&text[last_end..]);
+        }
+
+        Ok(PseudonymizedText {
+            text: result,
+            mappings,
+            entities: entities.to_vec(),
+        })
+    }
+
     /// Dispatch to the appropriate pseudonymization strategy.
     pub fn pseudonymize_with_strategy(
         text: &str,
@@ -89,6 +120,7 @@ impl Replacer {
         strategy: MaskingStrategy,
     ) -> Result<PseudonymizedText> {
         match strategy {
+            MaskingStrategy::Similar => Self::pseudonymize_similar(text, entities, vault),
             MaskingStrategy::Token => Self::pseudonymize(text, entities, vault),
             MaskingStrategy::FormatPreserving => Self::pseudonymize_fp(text, entities, vault),
         }
@@ -129,6 +161,16 @@ mod tests {
         let result = Replacer::pseudonymize_with_strategy(text, &entities, &mut vault, MaskingStrategy::FormatPreserving).unwrap();
         assert!(result.text.contains("+91"), "FP phone should preserve +91 prefix");
         assert!(!result.text.contains("98765 43210"), "Original digits should be replaced");
+    }
+
+    #[test]
+    fn test_pseudonymize_default_strategy_uses_similar_values() {
+        let text = "Email: lee.taylor56789@aol.com";
+        let entities = vec![make_entity("lee.taylor56789@aol.com", 7, 30, EntityCategory::Email)];
+        let mut vault = Vault::ephemeral();
+        let result = Replacer::pseudonymize_with_strategy(text, &entities, &mut vault, MaskingStrategy::default()).unwrap();
+        assert!(result.text.contains('@'), "Default strategy should use a fake email");
+        assert!(!result.text.contains("lee.taylor56789@aol.com"));
     }
 
     #[test]
