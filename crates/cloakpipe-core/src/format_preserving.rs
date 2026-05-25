@@ -69,6 +69,52 @@ static FAKE_DOMAINS: &[&str] = &[
     "marblemail.example",
 ];
 
+static FAKE_URL_HOSTS: &[&str] = &[
+    "atlas.internal.example",
+    "beacon.portal.example",
+    "cedar.records.example",
+    "drift.service.example",
+    "ember.care.example",
+    "field.archive.example",
+    "grove.health.example",
+    "harbor.files.example",
+    "iron.gateway.example",
+    "juniper.apps.example",
+    "keystone.data.example",
+    "laurel.clinic.example",
+    "meadow.portal.example",
+    "northbridge.service.example",
+    "oakridge.records.example",
+    "pinecrest.archive.example",
+    "quartz.gateway.example",
+    "riverbend.files.example",
+    "stonebridge.apps.example",
+    "timberline.data.example",
+];
+
+static FAKE_URL_SEGMENTS: &[&str] = &[
+    "records",
+    "cases",
+    "visits",
+    "reports",
+    "studies",
+    "files",
+    "sessions",
+    "requests",
+    "documents",
+    "items",
+    "members",
+    "claims",
+    "reviews",
+    "uploads",
+    "events",
+    "notices",
+    "summaries",
+    "images",
+    "orders",
+    "messages",
+];
+
 static FAKE_NAMES: &[&str] = &[
     "alex", "harper", "taylor", "morgan", "casey", "riley", "chris", "lee", "dana", "jamie",
     "blair", "cameron", "devon", "ellis", "finley", "gray", "hayden", "indigo", "kai", "logan",
@@ -489,6 +535,7 @@ pub fn generate_similar(original: &str, category: &EntityCategory, id: u32) -> S
         EntityCategory::PhoneNumber => fake_similar_phone(original, id),
         EntityCategory::Email => fake_similar_email(original, id),
         EntityCategory::IpAddress => fake_similar_ip(id),
+        EntityCategory::Url => fake_similar_url(original, id),
         EntityCategory::Secret => fake_similar_secret(original, id),
         EntityCategory::Custom(name) => match name.to_uppercase().as_str() {
             "SSN" | "SOCIAL_SECURITY_NUMBER" => fake_ssn(id),
@@ -583,6 +630,140 @@ fn fake_similar_phone(original: &str, id: u32) -> String {
     }
 
     apply_digit_format(original, &replacements)
+}
+
+fn fake_similar_url(original: &str, id: u32) -> String {
+    let trimmed = original.trim();
+    let (scheme, remainder) = split_url_scheme(trimmed);
+    let authority_end = remainder
+        .find(|c| matches!(c, '/' | '?' | '#'))
+        .unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
+
+    let host = FAKE_URL_HOSTS[seeded_index(id, 4, FAKE_URL_HOSTS.len())];
+    let authority = match url_authority_port(authority) {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
+    let suffix = fake_url_suffix(suffix, id);
+
+    ensure_changed(trimmed, format!("{scheme}://{authority}{suffix}"), id)
+}
+
+fn split_url_scheme(value: &str) -> (&str, &str) {
+    if let Some((scheme, remainder)) = value.split_once("://") {
+        if !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            return (scheme, remainder);
+        }
+    }
+
+    ("https", value)
+}
+
+fn url_authority_port(authority: &str) -> Option<&str> {
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(rest) = authority.strip_prefix('[') {
+        let (_, port) = rest.split_once("]:")?;
+        return port.chars().all(|c| c.is_ascii_digit()).then_some(port);
+    }
+
+    let (_, port) = authority.rsplit_once(':')?;
+    port.chars().all(|c| c.is_ascii_digit()).then_some(port)
+}
+
+fn fake_url_suffix(suffix: &str, id: u32) -> String {
+    if suffix.is_empty() {
+        return String::new();
+    }
+
+    let (before_fragment, fragment) = suffix
+        .split_once('#')
+        .map(|(prefix, fragment)| (prefix, Some(fragment)))
+        .unwrap_or((suffix, None));
+    let (path, query) = before_fragment
+        .split_once('?')
+        .map(|(path, query)| (path, Some(query)))
+        .unwrap_or((before_fragment, None));
+
+    let mut fake = fake_url_path(path, id);
+    if let Some(query) = query {
+        fake.push('?');
+        fake.push_str(&fake_url_query(query, id));
+    }
+    if let Some(fragment) = fragment {
+        fake.push('#');
+        fake.push_str(&fake_url_component(fragment, id, 97));
+    }
+    fake
+}
+
+fn fake_url_path(path: &str, id: u32) -> String {
+    path.split('/')
+        .enumerate()
+        .map(|(idx, segment)| {
+            if segment.is_empty() {
+                String::new()
+            } else {
+                fake_url_component(segment, id, idx)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn fake_url_query(query: &str, id: u32) -> String {
+    query
+        .split('&')
+        .enumerate()
+        .map(|(idx, pair)| {
+            let separator = if pair.contains('=') { "=" } else { "" };
+            let value = fake_url_component(pair.rsplit('=').next().unwrap_or(pair), id, idx + 31);
+            format!("q{}{separator}{value}", idx + 1)
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn fake_url_component(component: &str, id: u32, offset: usize) -> String {
+    if component.chars().all(|c| c.is_ascii_digit()) {
+        return (0..component.len())
+            .map(|idx| seeded_digit(id, offset + idx))
+            .collect();
+    }
+
+    let (stem, extension) = split_url_extension(component);
+    let mut fake = FAKE_URL_SEGMENTS[seeded_index(id, offset, FAKE_URL_SEGMENTS.len())].to_string();
+    let digit_count = stem.chars().filter(|c| c.is_ascii_digit()).count().min(6);
+    if digit_count > 0 {
+        fake.push('-');
+        fake.extend((0..digit_count).map(|idx| seeded_digit(id, offset + idx)));
+    }
+    if let Some(extension) = extension {
+        fake.push('.');
+        fake.push_str(extension);
+    }
+
+    ensure_changed(component, fake, id + offset as u32)
+}
+
+fn split_url_extension(component: &str) -> (&str, Option<&str>) {
+    let Some((stem, extension)) = component.rsplit_once('.') else {
+        return (component, None);
+    };
+    if stem.is_empty()
+        || extension.is_empty()
+        || extension.len() > 8
+        || !extension.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        return (component, None);
+    }
+
+    (stem, Some(extension))
 }
 
 fn fake_person(original: &str, id: u32) -> String {
@@ -1335,6 +1516,11 @@ mod tests {
                 EntityCategory::Date,
                 r"^[A-Z][a-z]+ \d{1,2}, \d{4}$",
             ),
+            (
+                "https://care.internal.example.org/patients/avery-collins",
+                EntityCategory::Url,
+                r"^https://[a-z0-9.-]+\.example/[a-z0-9-]+/[a-z0-9-]+$",
+            ),
             ("20%", EntityCategory::Percentage, r"^\d{1,2}%$"),
         ];
 
@@ -1350,7 +1536,28 @@ mod tests {
             assert!(!fake.contains("Location-"));
             assert!(!fake.contains("DATE_"));
             assert!(!fake.contains("PCT-"));
+            assert!(!fake.contains("masked-"));
         }
+    }
+
+    #[test]
+    fn generate_similar_preserves_url_shape_without_placeholder_host() {
+        let fake = generate_similar(
+            "http://internal.corp.example:8080/api/patients/avery-collins?token=abc123#chart",
+            &EntityCategory::Url,
+            7,
+        );
+
+        assert!(
+            fake.starts_with("http://"),
+            "URL scheme should be preserved"
+        );
+        assert!(fake.contains(":8080/"), "URL port should be preserved");
+        assert!(fake.contains("?q1="), "URL query shape should be preserved");
+        assert!(fake.contains('#'), "URL fragment shape should be preserved");
+        assert!(!fake.contains("masked-"));
+        assert!(!fake.contains("internal.corp"));
+        assert!(!fake.contains("avery-collins"));
     }
 
     #[test]

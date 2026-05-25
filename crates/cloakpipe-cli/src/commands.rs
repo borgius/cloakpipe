@@ -7,8 +7,12 @@ use crate::presets::{
 use anyhow::{bail, Context, Result};
 use cloakpipe_audit::AuditLogger;
 use cloakpipe_core::{
-    config::CloakPipeConfig, detector::Detector, rehydrator::Rehydrator, replacer::Replacer,
+    config::{CloakPipeConfig, CustomPattern, DetectionConfig, NerBackend},
+    detector::Detector,
+    rehydrator::Rehydrator,
+    replacer::Replacer,
     vault::Vault,
+    MaskingStrategy,
 };
 use cloakpipe_proxy::{server, state::AppState};
 use std::collections::HashMap;
@@ -38,6 +42,174 @@ enum ConfigSource {
     Existing(PathBuf),
     BundledPreset(ResolvedPreset),
     Missing(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditablePolicySource {
+    ExistingFile,
+    BundledPreset,
+    MissingFile,
+}
+
+struct EditablePolicy {
+    path: PathBuf,
+    config: CloakPipeConfig,
+    source: EditablePolicySource,
+    preset_name: Option<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+enum DetectionFamily {
+    Secrets,
+    Financial,
+    Dates,
+    Emails,
+    PhoneNumbers,
+    IpAddresses,
+    InternalUrls,
+}
+
+impl DetectionFamily {
+    fn enabled(self, config: &DetectionConfig) -> bool {
+        match self {
+            Self::Secrets => config.secrets,
+            Self::Financial => config.financial,
+            Self::Dates => config.dates,
+            Self::Emails => config.emails,
+            Self::PhoneNumbers => config.phone_numbers,
+            Self::IpAddresses => config.ip_addresses,
+            Self::InternalUrls => config.urls_internal,
+        }
+    }
+
+    fn set(self, config: &mut DetectionConfig, enabled: bool) {
+        match self {
+            Self::Secrets => config.secrets = enabled,
+            Self::Financial => config.financial = enabled,
+            Self::Dates => config.dates = enabled,
+            Self::Emails => config.emails = enabled,
+            Self::PhoneNumbers => config.phone_numbers = enabled,
+            Self::IpAddresses => config.ip_addresses = enabled,
+            Self::InternalUrls => config.urls_internal = enabled,
+        }
+    }
+}
+
+struct DetectionToggle {
+    family: DetectionFamily,
+    label: &'static str,
+}
+
+const DETECTION_TOGGLES: &[DetectionToggle] = &[
+    DetectionToggle {
+        family: DetectionFamily::Secrets,
+        label: "Secrets and API keys",
+    },
+    DetectionToggle {
+        family: DetectionFamily::Financial,
+        label: "Financial amounts and identifiers",
+    },
+    DetectionToggle {
+        family: DetectionFamily::Dates,
+        label: "Dates and fiscal periods",
+    },
+    DetectionToggle {
+        family: DetectionFamily::Emails,
+        label: "Email addresses",
+    },
+    DetectionToggle {
+        family: DetectionFamily::PhoneNumbers,
+        label: "Phone numbers",
+    },
+    DetectionToggle {
+        family: DetectionFamily::IpAddresses,
+        label: "IP addresses",
+    },
+    DetectionToggle {
+        family: DetectionFamily::InternalUrls,
+        label: "Internal URLs",
+    },
+];
+
+#[derive(Clone, Copy)]
+struct StrategyOption {
+    label: &'static str,
+    value: MaskingStrategy,
+}
+
+const STRATEGY_OPTIONS: &[StrategyOption] = &[
+    StrategyOption {
+        label: "similar",
+        value: MaskingStrategy::Similar,
+    },
+    StrategyOption {
+        label: "format-preserving",
+        value: MaskingStrategy::FormatPreserving,
+    },
+    StrategyOption {
+        label: "token",
+        value: MaskingStrategy::Token,
+    },
+];
+
+#[derive(Clone, Copy)]
+struct NerBackendOption {
+    label: &'static str,
+    value: NerBackend,
+}
+
+const NER_BACKEND_OPTIONS: &[NerBackendOption] = &[
+    NerBackendOption {
+        label: "distilbert_pii",
+        value: NerBackend::DistilBertPii,
+    },
+    NerBackendOption {
+        label: "gliner_pii",
+        value: NerBackend::GlinerPii,
+    },
+    NerBackendOption {
+        label: "bert",
+        value: NerBackend::Bert,
+    },
+    NerBackendOption {
+        label: "gliner",
+        value: NerBackend::Gliner,
+    },
+];
+
+#[derive(Default)]
+struct PolicyEditSummary {
+    detection_rules: bool,
+    replacement_strategy: bool,
+    ner_settings: bool,
+    preserve_list: bool,
+    force_list: bool,
+    custom_patterns: bool,
+}
+
+impl PolicyEditSummary {
+    fn descriptions(&self) -> Vec<&'static str> {
+        let mut descriptions = Vec::new();
+        if self.detection_rules {
+            descriptions.push("detection rule families");
+        }
+        if self.replacement_strategy {
+            descriptions.push("replacement strategy");
+        }
+        if self.ner_settings {
+            descriptions.push("NER settings");
+        }
+        if self.preserve_list {
+            descriptions.push("preserve list");
+        }
+        if self.force_list {
+            descriptions.push("force list");
+        }
+        if self.custom_patterns {
+            descriptions.push("custom regex patterns");
+        }
+        descriptions
+    }
 }
 
 /// Load configuration from TOML file.
@@ -316,6 +488,555 @@ pub async fn presets(action: crate::PresetCommands) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Policy editing commands.
+pub async fn policy(config_path: &str, action: crate::PolicyCommands) -> Result<()> {
+    match action {
+        crate::PolicyCommands::Edit => edit_policy(config_path).await,
+    }
+}
+
+async fn edit_policy(config_path: &str) -> Result<()> {
+    let target = resolve_editable_policy(config_path)?;
+    run_policy_editor(target)
+}
+
+fn resolve_editable_policy(config_path: &str) -> Result<EditablePolicy> {
+    match resolve_config_path(config_path)? {
+        ConfigSource::Existing(path) => Ok(EditablePolicy {
+            config: load_config_file(&path)?,
+            path,
+            source: EditablePolicySource::ExistingFile,
+            preset_name: None,
+        }),
+        ConfigSource::BundledPreset(preset) => Ok(EditablePolicy {
+            config: load_config_file(&preset.path)?,
+            path: preset.path,
+            source: EditablePolicySource::BundledPreset,
+            preset_name: Some(preset.name),
+        }),
+        ConfigSource::Missing(path) => Ok(EditablePolicy {
+            path,
+            config: default_config(),
+            source: EditablePolicySource::MissingFile,
+            preset_name: None,
+        }),
+    }
+}
+
+fn run_policy_editor(mut target: EditablePolicy) -> Result<()> {
+    use dialoguer::{Confirm, Select};
+
+    println!("CloakPipe Policy Editor\n");
+    print_policy_destination(&target);
+    if matches!(target.source, EditablePolicySource::MissingFile) {
+        println!("No policy exists at this path; editing starts from default settings.");
+    }
+
+    let mut summary = PolicyEditSummary::default();
+    let actions = [
+        "Detection rule families",
+        "Replacement strategy",
+        "NER settings",
+        "Preserve list",
+        "Force list",
+        "Custom regex patterns",
+        "Show destination path",
+        "Save policy",
+        "Exit without saving",
+    ];
+
+    loop {
+        let action_idx = Select::new()
+            .with_prompt("Choose a policy section")
+            .items(&actions)
+            .default(0)
+            .interact()?;
+
+        match action_idx {
+            0 => summary.detection_rules |= edit_detection_rules(&mut target.config)?,
+            1 => summary.replacement_strategy |= edit_replacement_strategy(&mut target.config)?,
+            2 => summary.ner_settings |= edit_ner_settings(&mut target.config)?,
+            3 => {
+                summary.preserve_list |= edit_string_list(
+                    &mut target.config.detection.overrides.preserve,
+                    "preserve list",
+                )?;
+            }
+            4 => {
+                summary.force_list |=
+                    edit_string_list(&mut target.config.detection.overrides.force, "force list")?;
+            }
+            5 => {
+                summary.custom_patterns |=
+                    edit_custom_patterns(&mut target.config.detection.custom.patterns)?;
+            }
+            6 => print_policy_destination(&target),
+            7 => {
+                let prompt = save_confirmation_prompt(&target);
+                if !Confirm::new()
+                    .with_prompt(prompt)
+                    .default(true)
+                    .interact()?
+                {
+                    println!("Save cancelled.");
+                    continue;
+                }
+
+                save_policy(&target.path, &target.config)?;
+                println!("Saved policy to {}", target.path.display());
+                print_policy_change_summary(&summary);
+                return Ok(());
+            }
+            8 => {
+                if Confirm::new()
+                    .with_prompt("Exit without saving?")
+                    .default(false)
+                    .interact()?
+                {
+                    println!("Policy edit cancelled. No changes written.");
+                    return Ok(());
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn print_policy_destination(target: &EditablePolicy) {
+    match (target.source, target.preset_name) {
+        (EditablePolicySource::BundledPreset, Some(name)) => {
+            println!(
+                "Destination: {} (installed '{}' preset copy)",
+                target.path.display(),
+                name
+            );
+        }
+        (EditablePolicySource::MissingFile, _) => {
+            println!("Destination: {} (new policy)", target.path.display());
+        }
+        _ => println!("Destination: {}", target.path.display()),
+    }
+}
+
+fn save_confirmation_prompt(target: &EditablePolicy) -> String {
+    match (target.source, target.preset_name) {
+        (EditablePolicySource::MissingFile, _) => {
+            format!("Create policy at {}?", target.path.display())
+        }
+        (EditablePolicySource::BundledPreset, Some(name)) => format!(
+            "Overwrite installed '{}' preset copy at {}?",
+            name,
+            target.path.display()
+        ),
+        _ => format!("Overwrite policy at {}?", target.path.display()),
+    }
+}
+
+fn print_policy_change_summary(summary: &PolicyEditSummary) {
+    let descriptions = summary.descriptions();
+    if descriptions.is_empty() {
+        println!("Updated: no policy fields changed.");
+    } else {
+        println!("Updated: {}.", descriptions.join(", "));
+    }
+}
+
+fn edit_detection_rules(config: &mut CloakPipeConfig) -> Result<bool> {
+    use dialoguer::MultiSelect;
+
+    let items: Vec<&str> = DETECTION_TOGGLES
+        .iter()
+        .map(|toggle| toggle.label)
+        .collect();
+    let defaults: Vec<bool> = DETECTION_TOGGLES
+        .iter()
+        .map(|toggle| toggle.family.enabled(&config.detection))
+        .collect();
+
+    let selected = MultiSelect::new()
+        .with_prompt("Select detection rule families to enable")
+        .items(&items)
+        .defaults(&defaults)
+        .interact()?;
+
+    Ok(apply_detection_selection(&mut config.detection, &selected))
+}
+
+fn apply_detection_selection(config: &mut DetectionConfig, selected_indices: &[usize]) -> bool {
+    let mut changed = false;
+    for (index, toggle) in DETECTION_TOGGLES.iter().enumerate() {
+        let selected = selected_indices.contains(&index);
+        if toggle.family.enabled(config) != selected {
+            toggle.family.set(config, selected);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn edit_replacement_strategy(config: &mut CloakPipeConfig) -> Result<bool> {
+    use dialoguer::Select;
+
+    let items: Vec<&str> = STRATEGY_OPTIONS.iter().map(|option| option.label).collect();
+    let selected = Select::new()
+        .with_prompt("Default replacement strategy")
+        .items(&items)
+        .default(strategy_index(config.proxy.masking_strategy))
+        .interact()?;
+    let strategy = STRATEGY_OPTIONS[selected].value;
+    let changed = config.proxy.masking_strategy != strategy;
+    config.proxy.masking_strategy = strategy;
+    Ok(changed)
+}
+
+fn strategy_index(strategy: MaskingStrategy) -> usize {
+    STRATEGY_OPTIONS
+        .iter()
+        .position(|option| option.value == strategy)
+        .unwrap_or(0)
+}
+
+fn edit_ner_settings(config: &mut CloakPipeConfig) -> Result<bool> {
+    use dialoguer::{Confirm, Input, Select};
+
+    let ner = &mut config.detection.ner;
+    let original_enabled = ner.enabled;
+    let original_backend = ner.backend;
+    let original_confidence_threshold = ner.confidence_threshold;
+    let original_entity_types = ner.entity_types.clone();
+    let original_sidecar_url = ner.sidecar_url.clone();
+    let original_model = ner.model.clone();
+
+    ner.enabled = Confirm::new()
+        .with_prompt("Enable NER detection?")
+        .default(ner.enabled)
+        .interact()?;
+
+    let backend_items: Vec<&str> = NER_BACKEND_OPTIONS
+        .iter()
+        .map(|option| option.label)
+        .collect();
+    let backend_idx = Select::new()
+        .with_prompt("NER backend")
+        .items(&backend_items)
+        .default(ner_backend_index(ner.backend))
+        .interact()?;
+    ner.backend = NER_BACKEND_OPTIONS[backend_idx].value;
+
+    ner.confidence_threshold = prompt_confidence_threshold(ner.confidence_threshold)?;
+    ner.entity_types = prompt_comma_separated_list(
+        "NER entity types (comma-separated, blank for all)",
+        &ner.entity_types,
+    )?;
+
+    let sidecar_url: String = Input::new()
+        .with_prompt("GLiNER-PII sidecar URL")
+        .with_initial_text(ner.sidecar_url.clone())
+        .interact_text()?;
+    ner.sidecar_url = sidecar_url.trim().to_string();
+    ner.model = prompt_optional_text("NER model path", ner.model.as_deref())?;
+
+    Ok(ner.enabled != original_enabled
+        || ner.backend != original_backend
+        || ner.confidence_threshold != original_confidence_threshold
+        || ner.entity_types != original_entity_types
+        || ner.sidecar_url != original_sidecar_url
+        || ner.model != original_model)
+}
+
+fn ner_backend_index(backend: NerBackend) -> usize {
+    NER_BACKEND_OPTIONS
+        .iter()
+        .position(|option| option.value == backend)
+        .unwrap_or(0)
+}
+
+fn prompt_confidence_threshold(current: f64) -> Result<f64> {
+    use dialoguer::Input;
+
+    loop {
+        let threshold: f64 = Input::new()
+            .with_prompt("NER confidence threshold (0.0-1.0)")
+            .default(current)
+            .interact_text()?;
+        if (0.0..=1.0).contains(&threshold) {
+            return Ok(threshold);
+        }
+        println!("Enter a value between 0.0 and 1.0.");
+    }
+}
+
+fn prompt_comma_separated_list(prompt: &str, current: &[String]) -> Result<Vec<String>> {
+    use dialoguer::Input;
+
+    let input: String = Input::new()
+        .with_prompt(prompt)
+        .with_initial_text(current.join(", "))
+        .allow_empty(true)
+        .interact_text()?;
+    Ok(parse_comma_separated(&input))
+}
+
+fn parse_comma_separated(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn prompt_optional_text(prompt: &str, current: Option<&str>) -> Result<Option<String>> {
+    use dialoguer::Input;
+
+    let current = current.unwrap_or_default();
+    let input: String = Input::new()
+        .with_prompt(format!("{} (blank for default, '-' to clear)", prompt))
+        .with_initial_text(current.to_string())
+        .allow_empty(true)
+        .interact_text()?;
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed == "-" {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+fn edit_string_list(values: &mut Vec<String>, label: &str) -> Result<bool> {
+    use dialoguer::{Input, MultiSelect, Select};
+
+    let mut changed = false;
+    let actions = ["Add value", "Remove selected values", "Done"];
+
+    loop {
+        print_string_list(label, values);
+        let action_idx = Select::new()
+            .with_prompt(format!("Manage {}", label))
+            .items(&actions)
+            .default(0)
+            .interact()?;
+
+        match action_idx {
+            0 => {
+                let value: String = Input::new()
+                    .with_prompt(format!("Value to add to {}", label))
+                    .allow_empty(true)
+                    .interact_text()?;
+                if add_unique_value(values, &value) {
+                    changed = true;
+                }
+            }
+            1 => {
+                if values.is_empty() {
+                    println!("No values to remove.");
+                    continue;
+                }
+                let selected = MultiSelect::new()
+                    .with_prompt(format!("Select values to remove from {}", label))
+                    .items(values.as_slice())
+                    .interact()?;
+                if remove_selected_indices(values, &selected) {
+                    changed = true;
+                }
+            }
+            2 => return Ok(changed),
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn print_string_list(label: &str, values: &[String]) {
+    if values.is_empty() {
+        println!("{} is empty.", label);
+    } else {
+        println!("{}:", label);
+        for value in values {
+            println!("  {}", value);
+        }
+    }
+}
+
+fn add_unique_value(values: &mut Vec<String>, value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || values.iter().any(|existing| existing == trimmed) {
+        return false;
+    }
+    values.push(trimmed.to_string());
+    true
+}
+
+fn edit_custom_patterns(patterns: &mut Vec<CustomPattern>) -> Result<bool> {
+    use dialoguer::{MultiSelect, Select};
+
+    let mut changed = false;
+    let actions = [
+        "Add pattern",
+        "Edit pattern",
+        "Remove selected patterns",
+        "Done",
+    ];
+
+    loop {
+        print_custom_patterns(patterns);
+        let action_idx = Select::new()
+            .with_prompt("Manage custom regex patterns")
+            .items(&actions)
+            .default(0)
+            .interact()?;
+
+        match action_idx {
+            0 => {
+                patterns.push(prompt_custom_pattern(None)?);
+                changed = true;
+            }
+            1 => {
+                if patterns.is_empty() {
+                    println!("No custom patterns to edit.");
+                    continue;
+                }
+                let labels = custom_pattern_labels(patterns);
+                let pattern_idx = Select::new()
+                    .with_prompt("Select a custom pattern to edit")
+                    .items(&labels)
+                    .default(0)
+                    .interact()?;
+                let updated = prompt_custom_pattern(Some(&patterns[pattern_idx]))?;
+                if custom_pattern_changed(&patterns[pattern_idx], &updated) {
+                    patterns[pattern_idx] = updated;
+                    changed = true;
+                }
+            }
+            2 => {
+                if patterns.is_empty() {
+                    println!("No custom patterns to remove.");
+                    continue;
+                }
+                let labels = custom_pattern_labels(patterns);
+                let selected = MultiSelect::new()
+                    .with_prompt("Select custom patterns to remove")
+                    .items(&labels)
+                    .interact()?;
+                if remove_selected_indices(patterns, &selected) {
+                    changed = true;
+                }
+            }
+            3 => return Ok(changed),
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn print_custom_patterns(patterns: &[CustomPattern]) {
+    if patterns.is_empty() {
+        println!("No custom regex patterns configured.");
+    } else {
+        println!("Custom regex patterns:");
+        for label in custom_pattern_labels(patterns) {
+            println!("  {}", label);
+        }
+    }
+}
+
+fn custom_pattern_labels(patterns: &[CustomPattern]) -> Vec<String> {
+    patterns
+        .iter()
+        .map(|pattern| format!("{} [{}] {}", pattern.name, pattern.category, pattern.regex))
+        .collect()
+}
+
+fn prompt_custom_pattern(existing: Option<&CustomPattern>) -> Result<CustomPattern> {
+    let name = prompt_non_empty_text(
+        "Pattern name",
+        existing
+            .map(|pattern| pattern.name.as_str())
+            .unwrap_or_default(),
+    )?;
+    let regex = prompt_non_empty_text(
+        "Regex",
+        existing
+            .map(|pattern| pattern.regex.as_str())
+            .unwrap_or_default(),
+    )?;
+    let category = prompt_non_empty_text(
+        "Category",
+        existing
+            .map(|pattern| pattern.category.as_str())
+            .unwrap_or_default(),
+    )?;
+
+    Ok(CustomPattern {
+        name,
+        regex,
+        category,
+    })
+}
+
+fn prompt_non_empty_text(prompt: &str, initial: &str) -> Result<String> {
+    use dialoguer::Input;
+
+    loop {
+        let input: String = Input::new()
+            .with_prompt(prompt)
+            .with_initial_text(initial.to_string())
+            .allow_empty(true)
+            .interact_text()?;
+        let trimmed = input.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+        println!("Value cannot be empty.");
+    }
+}
+
+fn custom_pattern_changed(current: &CustomPattern, updated: &CustomPattern) -> bool {
+    current.name != updated.name
+        || current.regex != updated.regex
+        || current.category != updated.category
+}
+
+fn remove_selected_indices<T>(values: &mut Vec<T>, selected_indices: &[usize]) -> bool {
+    if selected_indices.is_empty() {
+        return false;
+    }
+
+    let mut indices = selected_indices.to_vec();
+    indices.sort_unstable();
+    indices.dedup();
+    let original_len = values.len();
+
+    for index in indices.into_iter().rev() {
+        if index < values.len() {
+            values.remove(index);
+        }
+    }
+
+    values.len() != original_len
+}
+
+fn validate_policy_config(config: &CloakPipeConfig) -> Result<String> {
+    let toml_str = toml::to_string_pretty(config).context("Cannot serialize edited policy")?;
+    let roundtrip: CloakPipeConfig =
+        toml::from_str(&toml_str).context("Edited policy did not round-trip through TOML")?;
+    Detector::from_config(&roundtrip.detection).context(
+        "Edited detection policy is invalid; check custom regex patterns and NER settings",
+    )?;
+    Ok(toml_str)
+}
+
+fn save_policy(path: &Path, config: &CloakPipeConfig) -> Result<()> {
+    let toml_str = validate_policy_config(config)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Cannot create policy directory: {}", parent.display()))?;
+    }
+    std::fs::write(path, toml_str)
+        .with_context(|| format!("Cannot write policy: {}", path.display()))
 }
 
 /// Interactive guided setup.
@@ -957,6 +1678,116 @@ mod tests {
         );
     }
 
+    #[test]
+    fn apply_detection_selection_sets_supported_families() {
+        let mut detection = default_config().detection;
+
+        let changed = apply_detection_selection(&mut detection, &[0, 4, 6]);
+
+        assert!(changed);
+        assert!(detection.secrets);
+        assert!(!detection.financial);
+        assert!(!detection.dates);
+        assert!(!detection.emails);
+        assert!(detection.phone_numbers);
+        assert!(!detection.ip_addresses);
+        assert!(detection.urls_internal);
+    }
+
+    #[test]
+    fn parse_comma_separated_trims_and_skips_empty_values() {
+        assert_eq!(
+            parse_comma_separated("PERSON, , ORG,LOCATION "),
+            vec![
+                "PERSON".to_string(),
+                "ORG".to_string(),
+                "LOCATION".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_selected_indices_removes_sorted_unique_indices() {
+        let mut values = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        let changed = remove_selected_indices(&mut values, &[2, 0, 2]);
+
+        assert!(changed);
+        assert_eq!(values, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn validate_policy_config_rejects_invalid_custom_regex() {
+        let mut config = default_config();
+        config.detection.custom.patterns.push(CustomPattern {
+            name: "bad".to_string(),
+            regex: "[".to_string(),
+            category: "BAD".to_string(),
+        });
+
+        let err = validate_policy_config(&config).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("Edited detection policy is invalid"));
+    }
+
+    #[test]
+    fn save_policy_writes_roundtrippable_toml() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("nested").join("policy.toml");
+
+        save_policy(&path, &default_config()).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        let roundtrip: CloakPipeConfig = toml::from_str(&written).unwrap();
+        assert!(roundtrip.detection.secrets);
+    }
+
+    #[test]
+    fn save_policy_does_not_overwrite_when_validation_fails() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("policy.toml");
+        std::fs::write(&path, "original").unwrap();
+
+        let mut config = default_config();
+        config.detection.custom.patterns.push(CustomPattern {
+            name: "bad".to_string(),
+            regex: "[".to_string(),
+            category: "BAD".to_string(),
+        });
+
+        let result = save_policy(&path, &config);
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+    }
+
+    #[test]
+    fn resolve_editable_policy_uses_defaults_for_missing_local_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("missing.toml");
+
+        let target = resolve_editable_policy(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(target.source, EditablePolicySource::MissingFile);
+        assert_eq!(target.path, path);
+        assert!(target.config.detection.secrets);
+    }
+
+    #[test]
+    fn resolve_editable_policy_targets_installed_user_preset_copy() {
+        let config_home = tempfile::tempdir().unwrap();
+        let _env = EnvVarGuard::set_path("CLOAKPIPE_CONFIG_HOME", config_home.path());
+
+        let target = resolve_editable_policy("dpdp.toml").unwrap();
+
+        assert_eq!(target.source, EditablePolicySource::BundledPreset);
+        assert_eq!(target.preset_name, Some("dpdp"));
+        assert_eq!(target.path, config_home.path().join("policies/dpdp.toml"));
+        assert!(target.path.exists());
+    }
+
     fn failure_status() -> std::process::ExitStatus {
         #[cfg(unix)]
         {
@@ -966,6 +1797,37 @@ mod tests {
         #[cfg(windows)]
         {
             std::process::ExitStatus::from_raw(1)
+        }
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+            let guard = ENV_LOCK.lock().unwrap();
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self {
+                key,
+                previous,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
         }
     }
 }

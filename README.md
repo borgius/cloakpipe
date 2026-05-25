@@ -364,6 +364,15 @@ CloakPipe ships framework-specific policy presets as full `cloakpipe.toml`-compa
 cloakpipe --config policies/dpdp.toml start
 ```
 
+Create or edit the active policy interactively with:
+
+```bash
+cloakpipe policy edit
+cloakpipe --config dpdp.toml policy edit
+```
+
+The editor can create a missing local policy from defaults, edit an existing `--config` file, or edit the installed user copy of a bundled preset name such as `dpdp.toml`. It supports built-in detection toggles, the default replacement strategy, NER settings, custom regex patterns, the preserve list, and the force list. Replacement strategy is policy-level; per-category replacement strategies are not currently part of the config schema.
+
 Example (`policies/dpdp.toml`):
 
 ```toml

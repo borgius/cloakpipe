@@ -155,6 +155,7 @@ fn test_scan_sample_masks_documented_leaks() {
         "ROUTING_NUMBER-",
         "SWIFT_CODE-",
         "ISIN-",
+        "https://masked-",
     ] {
         assert!(
             !masked.contains(placeholder),

@@ -376,6 +376,7 @@ fn test_similar_masking_removes_structured_sample_leaks_and_placeholders() {
         "ROUTING_NUMBER-",
         "SWIFT_CODE-",
         "ISIN-",
+        "https://masked-",
     ] {
         assert!(
             !masked.contains(placeholder),

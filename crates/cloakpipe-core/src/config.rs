@@ -84,11 +84,15 @@ pub enum NerBackend {
     Bert,
     Gliner,
     /// nvidia/gliner-PII via Python sidecar (no ONNX deps required).
-    #[serde(alias = "gliner-pii", alias = "gliner_pii")]
+    #[serde(rename = "gliner_pii", alias = "gliner-pii", alias = "glinerpii")]
     GlinerPii,
     /// DistilBERT PII — 63MB ONNX model, 33 entity types, runs on any CPU.
     #[default]
-    #[serde(alias = "distilbert-pii", alias = "distilbert_pii")]
+    #[serde(
+        rename = "distilbert_pii",
+        alias = "distilbert-pii",
+        alias = "distilbertpii"
+    )]
     DistilBertPii,
 }
 
@@ -278,6 +282,12 @@ impl Default for AuditConfig {
 #[cfg(test)]
 mod tests {
     use super::{NerBackend, NerConfig};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct NerBackendDoc {
+        backend: NerBackend,
+    }
 
     #[test]
     fn ner_config_defaults_to_distilbert_pii_backend() {
@@ -285,5 +295,23 @@ mod tests {
             NerConfig::default().backend,
             NerBackend::DistilBertPii
         ));
+    }
+
+    #[test]
+    fn ner_backend_serializes_documented_distilbert_pii_name() {
+        assert_eq!(
+            toml::to_string(&NerBackendDoc {
+                backend: NerBackend::DistilBertPii,
+            })
+            .unwrap(),
+            "backend = \"distilbert_pii\"\n"
+        );
+    }
+
+    #[test]
+    fn ner_backend_accepts_previous_lowercase_serialization() {
+        let doc: NerBackendDoc = toml::from_str("backend = \"distilbertpii\"").unwrap();
+
+        assert!(matches!(doc.backend, NerBackend::DistilBertPii));
     }
 }

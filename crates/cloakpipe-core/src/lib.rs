@@ -98,7 +98,37 @@ pub enum MaskingStrategy {
     /// Standard tokens: PERSON_001, EMAIL_002, etc.
     Token,
     /// Format-preserving: fake phone numbers, emails, Aadhaar, etc.
+    #[serde(rename = "format-preserving", alias = "format_preserving")]
     FormatPreserving,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MaskingStrategy;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct StrategyDoc {
+        masking_strategy: MaskingStrategy,
+    }
+
+    #[test]
+    fn masking_strategy_serializes_documented_format_preserving_name() {
+        assert_eq!(
+            toml::to_string(&StrategyDoc {
+                masking_strategy: MaskingStrategy::FormatPreserving,
+            })
+            .unwrap(),
+            "masking_strategy = \"format-preserving\"\n"
+        );
+    }
+
+    #[test]
+    fn masking_strategy_accepts_existing_snake_case_name() {
+        let doc: StrategyDoc = toml::from_str("masking_strategy = \"format_preserving\"").unwrap();
+
+        assert_eq!(doc.masking_strategy, MaskingStrategy::FormatPreserving);
+    }
 }
 
 /// Result of rehydrating a response.

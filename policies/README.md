@@ -6,6 +6,15 @@ These files are **full `cloakpipe.toml`-compatible configs**. Pick one with:
 cloakpipe --config policies/<name>.toml start
 ```
 
+To customize a policy interactively, edit the active config:
+
+```bash
+cloakpipe policy edit
+cloakpipe --config dpdp.toml policy edit
+```
+
+When you pass a bundled preset name such as `dpdp.toml`, CloakPipe edits the installed user copy under `CLOAKPIPE_CONFIG_HOME/policies` instead of changing the bundled source file. The editor covers detection toggles, replacement strategy, NER settings, custom regex patterns, preserve values, and force values.
+
 ## Presets
 
 - `default.toml` — baseline config already shipped with the repo

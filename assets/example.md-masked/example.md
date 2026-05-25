@@ -59,8 +59,8 @@ Fiscal period: FY2028
 Next review date: 02/08/2031
 Discharge target date: September 15, 2026
 
-Care portal: https://masked-001.invalid
-Image archive: https://masked-002.invalid
+Care portal: https://timberline.data.example/orders/files
+Image archive: https://keystone.data.example/items/6307/30/members
 Bedside tablet IP: 172.18.72.98
 Telehealth kiosk IP: 172.18.143.195
 
@@ -95,7 +95,7 @@ Mongo URI: tahovcjsxelU18nubipw_kryfuTahovcJqxe1852bubipwdk5.fmtahov.jqxelsz.nub
 
 ## Clinical Narrative
 
-Dr. Wren Clark evaluated Arden Roberts at Silverlake Harbor Medicine after a referral from Meadowbrook Heights Insurance. The patient reported improvement from 44% pain flare frequency in Q4 2025 to 57.8% by September 15, 2026. Imaging uploaded through https://masked-003.invalid showed no acute complications. Follow-up notices were sent to arden.roberts@unionmail.example and tatum.wright@quartzmail.example.
+Dr. Wren Clark evaluated Arden Roberts at Silverlake Harbor Medicine after a referral from Meadowbrook Heights Insurance. The patient reported improvement from 44% pain flare frequency in Q4 2025 to 57.8% by September 15, 2026. Imaging uploaded through https://beacon.portal.example showed no acute complications. Follow-up notices were sent to arden.roberts@unionmail.example and tatum.wright@quartzmail.example.
 
 ## NER-Focused Extras
 

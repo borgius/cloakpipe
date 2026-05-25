@@ -42,6 +42,11 @@ enum Commands {
         #[command(subcommand)]
         action: PresetCommands,
     },
+    /// Create or edit policy files interactively
+    Policy {
+        #[command(subcommand)]
+        action: PolicyCommands,
+    },
     /// Start as an MCP server (for agent integrations)
     Mcp,
     /// CloakTree: vectorless document retrieval
@@ -100,6 +105,12 @@ pub enum PresetCommands {
     Install,
     /// List bundled presets and where they resolve from
     List,
+}
+
+#[derive(Subcommand)]
+pub enum PolicyCommands {
+    /// Create or edit the active policy file interactively
+    Edit,
 }
 
 #[derive(Subcommand)]
@@ -262,6 +273,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Init => commands::init().await,
         Commands::Setup => commands::setup().await,
         Commands::Presets { action } => commands::presets(action).await,
+        Commands::Policy { action } => commands::policy(&cli.config, action).await,
         Commands::Mcp => commands::mcp(&cli.config).await,
         Commands::Tree { action } => commands::tree(&cli.config, action).await,
         Commands::Vector { action } => commands::vector(action).await,
@@ -289,5 +301,28 @@ async fn main() -> anyhow::Result<()> {
             output,
             mappings,
         } => commands::restore(input, output, mappings).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn clap_command_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn policy_edit_command_parses() {
+        let cli = Cli::parse_from(["cloakpipe", "policy", "edit"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Policy {
+                action: PolicyCommands::Edit
+            }
+        ));
     }
 }
