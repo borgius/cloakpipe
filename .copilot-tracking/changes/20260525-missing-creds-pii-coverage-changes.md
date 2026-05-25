@@ -15,6 +15,8 @@
 - Replaced built-in similar-strategy placeholders (`User-*`, `Org-*`, `Location-*`, `DATE_*`, and `PCT-*`) with plausible similar values.
 - Added exported mapping restoration via `cloakpipe restore`, backed by `Rehydrator::rehydrate_from_mappings`.
 - Added scan/restore regression coverage proving `assets/example.md-masked/example.md` restores exactly to `assets/example.md`.
+- Expanded fake-data dictionaries to 50+ variants for domains, first names, last names, organization roots, street names, states, places, card issuers, and demographic replacement values.
+- Added a regression that enforces at least 50 variants per fake-data dictionary.
 
 ## Verification
 
@@ -22,4 +24,5 @@
 - `cargo test -p cloakpipe-cli test_scan` passed.
 - `cargo run -p cloakpipe-cli -- scan assets/example.md` completed successfully with 104 detected entities.
 - `cargo run -p cloakpipe-cli -- restore assets/example.md-masked/example.md -o target/tmp/example-restored.md` followed by `diff -u assets/example.md target/tmp/example-restored.md` passed.
+- Regenerated the masked sample after dictionary expansion and verified restore still matches the original sample exactly.
 - Verified the generated masked sample has no matches for the documented source leak inventory or targeted placeholder families: `User-`, `Org-`, `Location-`, `DATE_`, `PCT-`, `ID_NUMBER-`, `LICENSE_NUMBER-`, `IBAN-`, `ROUTING_NUMBER-`, `SWIFT_CODE-`, and `ISIN-`.

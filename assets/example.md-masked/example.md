@@ -4,34 +4,34 @@ This document is intentionally synthetic. Every identifier, account, address, to
 
 ## Patient Intake Summary
 
-Patient: Harper Wright
-Preferred name: Taylor
-Middle name: Morgan
-Sex: nonbinary
-Gender: undisclosed
+Patient: Arden Roberts
+Preferred name: Tatum
+Middle name: Quinn
+Sex: not answered
+Gender: not listed
 Age: 28
 Date of birth: 1983-06-08
 Alternate DOB: September 15, 2030
-Portal username: taylor.clark63
+Portal username: uma.simmons63
 Temporary password: FmtaHovcz4185
 PIN on file: 1852
 
-Employer: Evergreen Ridge Health
-Insurer: Meridian Crest Insurance
-Primary clinic: Clearwater Lane Medicine
+Employer: Quarry Point Health
+Insurer: Meadowbrook Heights Insurance
+Primary clinic: Silverlake Harbor Medicine
 
-Home address 1: 1137 Maple Ridge Drive
+Home address 1: 1137 Amber Grove Drive
 Home address 2: Apt 15U
-City: Franklin
-County: Lakeside
-State: Colorado
+City: Jasperton
+County: Prescott
+State: South Dakota
 ZIP code: 57514
 
 Phone 1: +1 529-630-7418
 Phone 2: (963) 074-1852
 Emergency contact phone: 074-185-2963
-Email 1: harper.wright@fastmail.com
-Email 2: taylor.clark@mail.com
+Email 1: arden.roberts@unionmail.example
+Email 2: tatum.wright@quartzmail.example
 
 Medical record number: MRN-1852-963074
 Employee ID: EMP-2963-07418
@@ -66,7 +66,7 @@ Telehealth kiosk IP: 172.18.143.195
 
 ## Billing And Banking Details
 
-Account holder: Harper Wright
+Account holder: Arden Roberts
 Patient account number: 1852963074185296
 Secondary account number: 2963074185296307
 IBAN 1: GB52HOVC74185296307418
@@ -79,7 +79,7 @@ ISIN 1: US5296307418
 ISIN 2: GB6307418529
 Credit card 1: 4852963074185299
 Credit card 2: 5963074185296307
-Card issuer note: American Express
+Card issuer note: Northstar Credit
 CVV note: 185
 
 ## Secrets And Access Material
@@ -95,27 +95,27 @@ Mongo URI: tahovcjsxelU18nubipw_kryfuTahovcJqxe1852bubipwdk5.fmtahov.jqxelsz.nub
 
 ## Clinical Narrative
 
-Dr. Casey Wilson evaluated Harper Wright at Clearwater Lane Medicine after a referral from Meridian Crest Insurance. The patient reported improvement from 44% pain flare frequency in Q4 2025 to 57.8% by September 15, 2026. Imaging uploaded through https://masked-003.invalid showed no acute complications. Follow-up notices were sent to harper.wright@fastmail.com and taylor.clark@mail.com.
+Dr. Wren Clark evaluated Arden Roberts at Silverlake Harbor Medicine after a referral from Meadowbrook Heights Insurance. The patient reported improvement from 44% pain flare frequency in Q4 2025 to 57.8% by September 15, 2026. Imaging uploaded through https://masked-003.invalid showed no acute complications. Follow-up notices were sent to arden.roberts@unionmail.example and tatum.wright@quartzmail.example.
 
 ## NER-Focused Extras
 
 These lines target entity types the app supports when NER and phone detection are enabled.
 
-First name: Taylor
-Last name: Riley
-Middle name repeat: Morgan
-Company name repeat: Evergreen Ridge Health
-Street repeat: 1137 Maple Ridge Drive
+First name: Tatum
+Last name: Gray
+Middle name repeat: Quinn
+Company name repeat: Quarry Point Health
+Street repeat: 1137 Amber Grove Drive
 Secondary address repeat: Apt 15U
-City repeat: Franklin
-State repeat: Colorado
-County repeat: Lakeside
+City repeat: Jasperton
+State repeat: South Dakota
+County repeat: Prescott
 ZIP repeat: 57514
-Username repeat: taylor.clark63
+Username repeat: uma.simmons63
 DOB repeat: 1983-06-08
-Account name repeat: Chris Taylor Alex HSA
+Account name repeat: Oakley Adams Rowan HSA
 Phone IMEI repeat: 418529630741852
 Password repeat: FmtaHovcz4185
 PIN repeat: 1852
-Credit card issuer repeat: Discover
+Credit card issuer repeat: Thistle Card
 Credit card CVV repeat: 296

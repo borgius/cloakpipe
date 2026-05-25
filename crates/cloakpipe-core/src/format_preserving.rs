@@ -7,21 +7,446 @@
 use crate::EntityCategory;
 
 static FAKE_DOMAINS: &[&str] = &[
-    "gmail.com",
-    "outlook.com",
-    "proton.me",
-    "fastmail.com",
-    "icloud.com",
-    "aol.com",
-    "mail.com",
+    "atlasmail.example",
+    "beaconmail.example",
+    "cedarmail.example",
+    "driftmail.example",
+    "embermail.example",
+    "fieldmail.example",
+    "grovepost.example",
+    "harbormail.example",
+    "ironpost.example",
+    "junipermail.example",
+    "keystonemail.example",
+    "laurelpost.example",
+    "meadowmail.example",
+    "northpost.example",
+    "oakmail.example",
+    "pinepost.example",
+    "quartzmail.example",
+    "riverpost.example",
+    "stonemail.example",
+    "timbermail.example",
+    "uplandpost.example",
+    "vistamail.example",
+    "westpost.example",
+    "yarrowmail.example",
+    "zenithmail.example",
+    "aldermail.example",
+    "birchpost.example",
+    "canyonmail.example",
+    "dovemail.example",
+    "eastonpost.example",
+    "foxmail.example",
+    "glenmail.example",
+    "heathpost.example",
+    "irismail.example",
+    "jasperpost.example",
+    "kingsmail.example",
+    "lindenpost.example",
+    "mapletonmail.example",
+    "newpost.example",
+    "orchardmail.example",
+    "prescottpost.example",
+    "quarrymail.example",
+    "redmail.example",
+    "silverpost.example",
+    "thistlemail.example",
+    "unionmail.example",
+    "veridianpost.example",
+    "windwardmail.example",
+    "yorkmail.example",
+    "zephyrpost.example",
+    "ashmail.example",
+    "copperpost.example",
+    "edgepost.example",
+    "flintmail.example",
+    "greenpost.example",
+    "hollowmail.example",
+    "ivypost.example",
+    "kestrelmail.example",
+    "lagoonpost.example",
+    "marblemail.example",
 ];
 
 static FAKE_NAMES: &[&str] = &[
     "alex", "harper", "taylor", "morgan", "casey", "riley", "chris", "lee", "dana", "jamie",
+    "blair", "cameron", "devon", "ellis", "finley", "gray", "hayden", "indigo", "kai", "logan",
+    "marlow", "noel", "parker", "quinn", "reese", "sage", "shawn", "skyler", "teagan", "val",
+    "winter", "arden", "ashton", "brady", "carter", "drew", "emerson", "frankie", "greer",
+    "hollis", "ira", "jules", "kendall", "lane", "micah", "nikki", "oakley", "peyton", "remy",
+    "robin", "sawyer", "terry", "uma", "vaughn", "wren", "yael", "zion", "bellamy", "elliot",
+    "phoenix", "rowan", "selby", "tatum", "averyn", "briar", "darcy", "eden", "lennox", "marin",
+    "sloan",
 ];
 
 static FAKE_SURNAMES: &[&str] = &[
     "miller", "wilson", "moore", "taylor", "anderson", "hall", "young", "king", "wright", "clark",
+    "adams", "baker", "brooks", "carter", "cooper", "davis", "edwards", "fisher", "foster",
+    "garcia", "green", "griffin", "harris", "hayes", "hill", "hughes", "jenkins", "kelly", "lewis",
+    "long", "martin", "mitchell", "murphy", "nelson", "parker", "price", "reed", "rivera",
+    "roberts", "ross", "sanders", "scott", "stewart", "turner", "walker", "ward", "watson",
+    "white", "wood", "bennett", "bell", "coleman", "diaz", "evans", "flores", "gray", "howard",
+    "james", "powell", "simmons", "thomas",
+];
+
+static FAKE_ORG_ROOTS: &[&str] = &[
+    "Summit Valley",
+    "Harbor Point",
+    "Pioneer Grove",
+    "Evergreen Ridge",
+    "Clearwater Lane",
+    "Atlas Grove",
+    "Beacon Hill",
+    "Crestview Harbor",
+    "Driftwood Point",
+    "Elmstone Valley",
+    "Granite Bay",
+    "Highland Park",
+    "Ironwood Trail",
+    "Juniper Field",
+    "Keystone Lake",
+    "Laurel Bridge",
+    "Meadowbrook Heights",
+    "Norwood Grove",
+    "Oakmont Springs",
+    "Pinecrest Shore",
+    "Quartz Meadow",
+    "Riverbend Terrace",
+    "Stonegate Valley",
+    "Timberline Point",
+    "Union Crest",
+    "Vista Haven",
+    "Westbridge Grove",
+    "Yarrow Ridge",
+    "Zenith Harbor",
+    "Alder Point",
+    "Birch Valley",
+    "Canyon Grove",
+    "Dovetail Ridge",
+    "Easton Harbor",
+    "Foxglove Point",
+    "Glenhaven Crest",
+    "Hawthorne Valley",
+    "Iris Grove",
+    "Jasper Ridge",
+    "Kingsley Point",
+    "Linden Harbor",
+    "Mapleton Grove",
+    "Newbridge Crest",
+    "Orchard Valley",
+    "Prescott Ridge",
+    "Quarry Point",
+    "Redstone Grove",
+    "Silverlake Harbor",
+    "Thistle Valley",
+    "Upland Crest",
+    "Veridian Grove",
+    "Yorkfield Ridge",
+    "Zephyr Valley",
+    "Ashford Grove",
+    "Bristlecone Point",
+    "Copperfield Ridge",
+    "Dunhill Harbor",
+    "Edgewater Valley",
+    "Flint Ridge",
+    "Greenfield Point",
+];
+
+static FAKE_STREET_NAMES: &[&str] = &[
+    "Maple Ridge",
+    "Pine Hollow",
+    "Oak Meadow",
+    "Alder Brook",
+    "Birch Hollow",
+    "Canyon Crest",
+    "Dove Field",
+    "Elm Grove",
+    "Fern Valley",
+    "Granite Hill",
+    "Harbor View",
+    "Iris Glen",
+    "Juniper Bend",
+    "Keystone Park",
+    "Laurel Springs",
+    "Meadow View",
+    "Norwood Bend",
+    "Orchard Hill",
+    "Parker Glen",
+    "Quartz Field",
+    "River Stone",
+    "Summit Brook",
+    "Timber Glen",
+    "Union Meadow",
+    "Vista Park",
+    "Westfield Brook",
+    "Yarrow Bend",
+    "Zephyr Hill",
+    "Aspen Field",
+    "Briar Meadow",
+    "Clover Park",
+    "Dunhill View",
+    "Easton Grove",
+    "Fulton Ridge",
+    "Gable Brook",
+    "Haven Crest",
+    "Ivory Bend",
+    "Jasper Meadow",
+    "Kingsley Grove",
+    "Linden Park",
+    "Marble Ridge",
+    "Newport Field",
+    "Olive Brook",
+    "Pebble View",
+    "Quail Ridge",
+    "Redstone Hill",
+    "Silver Field",
+    "Thorn Valley",
+    "Upland Grove",
+    "Veridian Park",
+    "Windward Brook",
+    "Yorkfield Meadow",
+    "Amber Grove",
+    "Beacon Ridge",
+    "Copper Glen",
+    "Driftwood Park",
+    "Ember Hill",
+    "Foxglove Bend",
+    "Glenhaven View",
+    "Hearthstone Field",
+];
+
+static FAKE_STATES: &[&str] = &[
+    "Alabama",
+    "Alaska",
+    "Arizona",
+    "Arkansas",
+    "California",
+    "Colorado",
+    "Connecticut",
+    "Delaware",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Idaho",
+    "Illinois",
+    "Indiana",
+    "Iowa",
+    "Kansas",
+    "Kentucky",
+    "Louisiana",
+    "Maine",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Mississippi",
+    "Missouri",
+    "Montana",
+    "Nebraska",
+    "Nevada",
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "North Dakota",
+    "Ohio",
+    "Oklahoma",
+    "Oregon",
+    "Pennsylvania",
+    "Rhode Island",
+    "South Carolina",
+    "South Dakota",
+    "Tennessee",
+    "Texas",
+    "Utah",
+    "Vermont",
+    "Virginia",
+    "Washington",
+    "West Virginia",
+    "Wisconsin",
+    "Wyoming",
+];
+
+static FAKE_PLACES: &[&str] = &[
+    "Riverton",
+    "Ashland",
+    "Brookfield",
+    "Franklin",
+    "Lakeside",
+    "Georgetown",
+    "Alderport",
+    "Bayfield",
+    "Crestmont",
+    "Dunwich",
+    "Eastvale",
+    "Fairmont",
+    "Glenbrook",
+    "Hartwell",
+    "Ironton",
+    "Jasperton",
+    "Kingsport",
+    "Lakewood",
+    "Millbrook",
+    "Newhaven",
+    "Oakdale",
+    "Pinehurst",
+    "Quarryville",
+    "Redford",
+    "Silverton",
+    "Timberlake",
+    "Unionville",
+    "Valewood",
+    "Westport",
+    "Yorktown",
+    "Zephyrhills",
+    "Arborfield",
+    "Briarcliff",
+    "Copperton",
+    "Driftwood",
+    "Emberton",
+    "Foxborough",
+    "Graniteville",
+    "Harborview",
+    "Ivydale",
+    "Juniper",
+    "Keystone",
+    "Larkspur",
+    "Meadowvale",
+    "Norcross",
+    "Orchardview",
+    "Prescott",
+    "Quailwood",
+    "Rockport",
+    "Stonehaven",
+    "Thornfield",
+    "Upland",
+    "Veridian",
+    "Windcrest",
+    "Yarrow",
+    "Ashbourne",
+    "Bellview",
+    "Clearport",
+    "Doverton",
+    "Elmhurst",
+];
+
+static FAKE_CARD_ISSUERS: &[&str] = &[
+    "Atlas Card Services",
+    "Beacon Credit",
+    "Cedar Payment Network",
+    "Driftwood Bankcard",
+    "Ember Financial",
+    "Fieldstone Card",
+    "GrovePay",
+    "Harbor Credit",
+    "Ironwood Card",
+    "Juniper Payments",
+    "Keystone Credit",
+    "Laurel Card Services",
+    "MeadowPay",
+    "Northstar Credit",
+    "Oakmont Card",
+    "Pinecrest Payments",
+    "Quartz Credit",
+    "Riverbend Card",
+    "Stonegate Payments",
+    "Timberline Credit",
+    "Union Card Services",
+    "VistaPay",
+    "Westbridge Credit",
+    "Yarrow Card",
+    "Zenith Payments",
+    "Alder Credit",
+    "Birch Bankcard",
+    "Canyon Payments",
+    "Dovetail Credit",
+    "Easton Card",
+    "Foxglove Pay",
+    "Glenhaven Credit",
+    "Hawthorne Card",
+    "Iris Payments",
+    "Jasper Credit",
+    "Kingsley Card",
+    "LindenPay",
+    "Mapleton Credit",
+    "Newbridge Card",
+    "Orchard Payments",
+    "Prescott Credit",
+    "Quarry Card",
+    "Redstone Pay",
+    "Silverlake Credit",
+    "Thistle Card",
+    "Upland Payments",
+    "Veridian Credit",
+    "Windward Card",
+    "Yorkfield Pay",
+    "Zephyr Credit",
+    "Ashford Card",
+    "Copperfield Payments",
+    "Dunhill Credit",
+    "Edgewater Card",
+    "FlintPay",
+    "Greenfield Credit",
+    "Hearthstone Card",
+    "Ivory Payments",
+    "Kestrel Credit",
+    "Lagoon Card",
+];
+
+static FAKE_DEMOGRAPHIC_VALUES: &[&str] = &[
+    "undisclosed",
+    "not specified",
+    "private",
+    "withheld",
+    "unreported",
+    "not provided",
+    "confidential",
+    "declined",
+    "unspecified",
+    "not listed",
+    "masked",
+    "redacted",
+    "restricted",
+    "patient declined",
+    "self described",
+    "not recorded",
+    "data withheld",
+    "privacy requested",
+    "unavailable",
+    "unknown",
+    "not collected",
+    "deferred",
+    "protected",
+    "suppressed",
+    "not disclosed",
+    "record sealed",
+    "intentionally blank",
+    "clinician withheld",
+    "administrative hold",
+    "not answered",
+    "pending update",
+    "masked value",
+    "privacy masked",
+    "secure value",
+    "hidden",
+    "not stated",
+    "prefer not to say",
+    "field withheld",
+    "registry private",
+    "patient private",
+    "internal use only",
+    "restricted field",
+    "sensitive field",
+    "confidential field",
+    "masked field",
+    "privacy field",
+    "not available",
+    "review required",
+    "secured",
+    "omitted",
+    "protected field",
 ];
 
 /// Generate a format-preserving fake token for the given category and id.
@@ -197,18 +622,13 @@ fn fake_person(original: &str, id: u32) -> String {
 }
 
 fn fake_organization(original: &str, id: u32) -> String {
-    let roots = [
-        "Summit Valley",
-        "Harbor Point",
-        "Pioneer Grove",
-        "Evergreen Ridge",
-        "Meridian Crest",
-        "Clearwater Lane",
-    ];
     let suffix = organization_suffix(original).unwrap_or("Group");
     ensure_changed(
         original.trim(),
-        format!("{} {suffix}", roots[seeded_index(id, 2, roots.len())]),
+        format!(
+            "{} {suffix}",
+            FAKE_ORG_ROOTS[seeded_index(id, 2, FAKE_ORG_ROOTS.len())]
+        ),
         id,
     )
 }
@@ -243,39 +663,29 @@ fn fake_location(original: &str, id: u32) -> String {
     }
 
     if trimmed.chars().any(|c| c.is_ascii_digit()) {
-        let street_names = ["Maple Ridge", "Cedar Lake", "Pine Hollow", "Oak Meadow"];
         let suffix = street_suffix(trimmed).unwrap_or("Street");
         let number = 1000 + (id * 137 % 8999);
         return ensure_changed(
             trimmed,
             format!(
                 "{number} {} {suffix}",
-                street_names[seeded_index(id, 3, street_names.len())]
+                FAKE_STREET_NAMES[seeded_index(id, 3, FAKE_STREET_NAMES.len())]
             ),
             id,
         );
     }
 
-    let states = ["Colorado", "Vermont", "Michigan", "Virginia", "Arizona"];
     if is_us_state(trimmed) {
         return ensure_changed(
             trimmed,
-            states[seeded_index(id, 5, states.len())].to_string(),
+            FAKE_STATES[seeded_index(id, 5, FAKE_STATES.len())].to_string(),
             id,
         );
     }
 
-    let places = [
-        "Riverton",
-        "Ashland",
-        "Brookfield",
-        "Franklin",
-        "Lakeside",
-        "Georgetown",
-    ];
     ensure_changed(
         trimmed,
-        places[seeded_index(id, 6, places.len())].to_string(),
+        FAKE_PLACES[seeded_index(id, 6, FAKE_PLACES.len())].to_string(),
         id,
     )
 }
@@ -596,10 +1006,11 @@ fn fake_imei(original: &str, id: u32) -> String {
 }
 
 fn fake_card_issuer(original: &str, id: u32) -> String {
-    let issuers = ["Discover", "American Express"];
-    let mut fake = issuers[seeded_index(id, 6, issuers.len())].to_string();
+    let mut fake = FAKE_CARD_ISSUERS[seeded_index(id, 6, FAKE_CARD_ISSUERS.len())].to_string();
     if fake.eq_ignore_ascii_case(original.trim()) {
-        fake = issuers[(seeded_index(id, 6, issuers.len()) + 1) % issuers.len()].to_string();
+        fake = FAKE_CARD_ISSUERS
+            [(seeded_index(id, 6, FAKE_CARD_ISSUERS.len()) + 1) % FAKE_CARD_ISSUERS.len()]
+        .to_string();
     }
     fake
 }
@@ -612,10 +1023,12 @@ fn fake_age(original: &str, id: u32) -> String {
 }
 
 fn fake_demographic_word(original: &str, id: u32) -> String {
-    let values = ["nonbinary", "undisclosed"];
-    let mut fake = values[seeded_index(id, 7, values.len())].to_string();
+    let mut fake =
+        FAKE_DEMOGRAPHIC_VALUES[seeded_index(id, 7, FAKE_DEMOGRAPHIC_VALUES.len())].to_string();
     if fake.eq_ignore_ascii_case(original.trim()) {
-        fake = values[(seeded_index(id, 7, values.len()) + 1) % values.len()].to_string();
+        fake = FAKE_DEMOGRAPHIC_VALUES[(seeded_index(id, 7, FAKE_DEMOGRAPHIC_VALUES.len()) + 1)
+            % FAKE_DEMOGRAPHIC_VALUES.len()]
+        .to_string();
     }
     fake
 }
@@ -865,6 +1278,23 @@ mod tests {
     }
 
     #[test]
+    fn fake_data_dictionaries_have_broad_variants() {
+        for (name, len) in [
+            ("domains", FAKE_DOMAINS.len()),
+            ("first names", FAKE_NAMES.len()),
+            ("last names", FAKE_SURNAMES.len()),
+            ("organization roots", FAKE_ORG_ROOTS.len()),
+            ("street names", FAKE_STREET_NAMES.len()),
+            ("states", FAKE_STATES.len()),
+            ("places", FAKE_PLACES.len()),
+            ("card issuers", FAKE_CARD_ISSUERS.len()),
+            ("demographic values", FAKE_DEMOGRAPHIC_VALUES.len()),
+        ] {
+            assert!(len >= 50, "{name} should have at least 50 variants");
+        }
+    }
+
+    #[test]
     fn generate_similar_returns_plausible_email() {
         let fake = generate_similar("lee.taylor56789@aol.com", &EntityCategory::Email, 1);
         assert!(fake.contains('@'), "Similar email should contain @");
@@ -1025,7 +1455,7 @@ mod tests {
         );
 
         assert_ne!(fake, "Visa");
-        assert!(["Mastercard", "Discover", "American Express"].contains(&fake.as_str()));
+        assert!(FAKE_CARD_ISSUERS.contains(&fake.as_str()));
     }
 
     #[test]
