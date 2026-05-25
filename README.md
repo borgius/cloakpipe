@@ -53,8 +53,8 @@ export OPENAI_BASE_URL=http://localhost:3100/v1
 # Install (release binary first, cargo fallback)
 curl -fsSL https://raw.githubusercontent.com/borgius/cloakpipe/refs/heads/main/install.sh | sh
 
-# Optional direct cargo install
-cargo install cloakpipe
+# Optional direct cargo install from borgius/cloakpipe
+cargo install --git https://github.com/borgius/cloakpipe --bin cloakpipe cloakpipe-cli
 
 # Start the proxy
 cloakpipe serve --port 3100
@@ -592,7 +592,7 @@ We welcome contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 **Development setup:**
 
 ```bash
-git clone https://github.com/rohansx/cloakpipe.git
+git clone https://github.com/borgius/cloakpipe.git
 cd cloakpipe
 cargo build
 cargo test

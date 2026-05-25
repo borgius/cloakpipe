@@ -40,7 +40,7 @@ fi
 version="$(python3 tools/ci/bump_workspace_version.py --write "${github_output_args[@]}")"
 tag="v${version}"
 
-git add Cargo.toml crates/*/Cargo.toml
+git add Cargo.toml Cargo.lock crates/*/Cargo.toml
 git commit -m "chore(release): bump version to ${tag}"
 
 if (( ! skip_push )); then

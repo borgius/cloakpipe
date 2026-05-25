@@ -36,6 +36,22 @@ def update_crate_manifest(path: Path, updated: str) -> None:
         path.write_text(updated_text, encoding="utf-8")
 
 
+def update_lockfile(path: Path, crate_names: list[str], updated: str) -> None:
+    lock_text = path.read_text(encoding="utf-8")
+
+    for crate_name in crate_names:
+        lock_text, replacements = re.subn(
+            rf'(\[\[package\]\]\nname = "{re.escape(crate_name)}"\nversion = ")([^"]+)(")',
+            rf"\g<1>{updated}\3",
+            lock_text,
+            count=1,
+        )
+        if replacements != 1:
+            raise RuntimeError(f"failed to update {crate_name} version in {path}")
+
+    path.write_text(lock_text, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true")
@@ -44,14 +60,21 @@ def main() -> int:
 
     repo_root = Path(__file__).resolve().parents[2]
     workspace_manifest = repo_root / "Cargo.toml"
+    lockfile = repo_root / "Cargo.lock"
     cargo = tomllib.loads(workspace_manifest.read_text(encoding="utf-8"))
     current = cargo["workspace"]["package"]["version"]
     updated = next_minor_version(current)
+    crate_manifests = sorted((repo_root / "crates").glob("*/Cargo.toml"))
+    crate_names = [
+        tomllib.loads(manifest.read_text(encoding="utf-8"))["package"]["name"]
+        for manifest in crate_manifests
+    ]
 
     if args.write:
         update_workspace_manifest(workspace_manifest, current, updated)
-        for manifest in sorted((repo_root / "crates").glob("*/Cargo.toml")):
+        for manifest in crate_manifests:
             update_crate_manifest(manifest, updated)
+        update_lockfile(lockfile, crate_names, updated)
 
     if args.github_output:
         with Path(args.github_output).open("a", encoding="utf-8") as github_output:

@@ -15,7 +15,7 @@ members = [
 version = "0.13.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/rohansx/cloakpipe"
+repository = "https://github.com/borgius/cloakpipe"
 description = "Privacy middleware for LLM & RAG pipelines"
 
 [workspace.dependencies]
