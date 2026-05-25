@@ -129,12 +129,27 @@ pub enum NerCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Download model files for a built-in NER backend
+    Download {
+        /// Backend model to download
+        #[arg(long, value_enum, default_value_t = NerDownloadBackend::DistilbertPii)]
+        backend: NerDownloadBackend,
+        /// Re-download even if model files already exist
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 pub enum NerInstallBackend {
     #[value(alias = "gliner_pii")]
     GlinerPii,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum NerDownloadBackend {
+    #[value(alias = "distilbert_pii")]
+    DistilbertPii,
 }
 
 #[derive(Subcommand)]

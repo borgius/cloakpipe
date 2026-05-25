@@ -102,6 +102,28 @@ impl DistilBertPiiDetector {
 
         info!("Loading DistilBERT-PII model from: {}", model_path);
 
+        // Ensure the ORT library is reachable before creating a session.
+        // With `load-dynamic`, dlopen on macOS may not search /usr/local/lib by
+        // default (SIP can suppress DYLD_FALLBACK_LIBRARY_PATH).  We probe known
+        // installation paths and call ort::init_from() when needed.
+        if std::env::var("ORT_DYLIB_PATH").is_err() {
+            let candidates = [
+                "/usr/local/lib/libonnxruntime.dylib",
+                "/opt/homebrew/lib/libonnxruntime.dylib",
+                "/usr/lib/libonnxruntime.so",
+                "/usr/local/lib/libonnxruntime.so",
+            ];
+            if let Some(found) = candidates.iter().find(|p| std::path::Path::new(p).exists()) {
+                debug!("Initialising ORT from {}", found);
+                let ok = ort::init_from(found)
+                    .map_err(|e| anyhow::anyhow!("Failed to initialise ONNX Runtime: {}", e))?
+                    .commit();
+                if !ok {
+                    return Err(anyhow::anyhow!("ONNX Runtime init failed for '{}'", found));
+                }
+            }
+        }
+
         let session = Session::builder()
             .map_err(|e| anyhow::anyhow!("Failed to create session builder: {}", e))?
             .with_intra_threads(2)

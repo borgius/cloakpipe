@@ -23,7 +23,28 @@ tasks:
     cmds:
       - cargo install --path {{.CLI_CRATE}} --force
 
+  clean:
+    desc: Remove Cargo build artifacts and all downloaded/cached assets (NER venv, models)
+    cmds:
+      # - cargo clean
+      - rm -rf .cloakpipe target models
+
   test:
     desc: Run all unit and integration tests across the workspace
     cmds:
       - cargo test --workspace
+
+  upload-model:
+    desc: Upload quantized ONNX model as a GitHub Release asset
+    cmds:
+      - |
+        command -v gh >/dev/null 2>&1 || { echo "GitHub CLI not installed — run: brew install gh && gh auth login"; exit 1; }
+        MODEL=models/distilbert-pii/quantized/model_quantized.onnx
+        [[ -f "$MODEL" ]] || { echo "Model not found — run: cloakpipe ner download"; exit 1; }
+        TAG=models-v1
+        # Create the release if it doesn't exist yet
+        gh release view "$TAG" >/dev/null 2>&1 || \
+          gh release create "$TAG" --title "Pre-built model assets" \
+            --notes "Quantized DistilBERT-PII ONNX model for cloakpipe ner."
+        gh release upload "$TAG" "$MODEL" --clobber
+        echo "Uploaded to: $(gh release view $TAG --json url -q .url)"

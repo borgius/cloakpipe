@@ -21,6 +21,7 @@ demo/
 
 # Models (downloaded separately)
 models/
+!models/distilbert-pii/quantized/model_quantized.onnx
 
 # Editor
 *.swp

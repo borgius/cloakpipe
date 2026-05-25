@@ -25,6 +25,8 @@ const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
 const GLINER_VENV_DIR: &str = ".cloakpipe/gliner-pii-venv";
 const GLINER_SERVER_SCRIPT: &str = "tools/gliner-pii-server.py";
 
+const DISTILBERT_DOWNLOAD_SCRIPT: &str = "tools/download_model.sh";
+
 enum ConfigSource {
     Existing(PathBuf),
     BundledPreset(ResolvedPreset),
@@ -433,7 +435,40 @@ pub async fn ner(action: crate::NerCommands) -> Result<()> {
                 start_gliner_pii(python, host, port, threshold, dry_run)
             }
         },
+        crate::NerCommands::Download { backend, force } => match backend {
+            crate::NerDownloadBackend::DistilbertPii => download_distilbert_pii(force).await,
+        },
     }
+}
+
+/// Download the DistilBERT-PII quantized ONNX model.
+/// Delegates to tools/download_model.sh which tries GitHub LFS first,
+/// then falls back to HuggingFace download + ONNX conversion.
+async fn download_distilbert_pii(force: bool) -> Result<()> {
+    let current_dir = std::env::current_dir().context("Cannot determine current directory")?;
+    let project_root = find_gliner_project_root(&current_dir)?;
+    let script = project_root.join(DISTILBERT_DOWNLOAD_SCRIPT);
+    if !script.exists() {
+        bail!("Download script not found: {}\nRun from the CloakPipe project root.", script.display());
+    }
+
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(&script);
+    if force {
+        cmd.arg("--force");
+    }
+
+    let status = cmd
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .with_context(|| format!("Failed to run {}", script.display()))?;
+
+    if !status.success() {
+        bail!("Model download failed.");
+    }
+    Ok(())
 }
 
 fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) -> Result<()> {

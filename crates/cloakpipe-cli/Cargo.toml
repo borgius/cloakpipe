@@ -27,6 +27,8 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+futures.workspace = true
+indicatif = "0.17"
 dialoguer.workspace = true
 
 [dev-dependencies]
