@@ -35,6 +35,7 @@ urls_internal = true
 
 [detection.ner]
 enabled = false
+backend = "distilbert_pii"
 # model = "./models/ner-english-base.onnx"
 confidence_threshold = 0.85
 entity_types = ["PERSON", "ORG", "LOC"]

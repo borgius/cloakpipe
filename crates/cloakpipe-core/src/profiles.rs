@@ -48,7 +48,7 @@ impl IndustryProfile {
                 urls_internal: true,
                 ner: NerConfig {
                     enabled: true,
-                    backend: NerBackend::GlinerPii,
+                    backend: NerBackend::DistilBertPii,
                     model: None,
                     confidence_threshold: 0.4,
                     entity_types: Vec::new(),
@@ -68,7 +68,7 @@ impl IndustryProfile {
                 urls_internal: false,
                 ner: NerConfig {
                     enabled: true,
-                    backend: NerBackend::GlinerPii,
+                    backend: NerBackend::DistilBertPii,
                     model: None,
                     confidence_threshold: 0.4,
                     entity_types: Vec::new(),
@@ -98,7 +98,7 @@ impl IndustryProfile {
                 urls_internal: false,
                 ner: NerConfig {
                     enabled: true,
-                    backend: NerBackend::GlinerPii,
+                    backend: NerBackend::DistilBertPii,
                     model: None,
                     confidence_threshold: 0.4,
                     entity_types: Vec::new(),
@@ -286,7 +286,7 @@ mod tests {
         assert!(config.emails);
         assert!(config.phone_numbers);
         assert!(config.ner.enabled);
-        assert!(matches!(config.ner.backend, NerBackend::GlinerPii));
+        assert!(matches!(config.ner.backend, NerBackend::DistilBertPii));
         assert!(config.custom.patterns.is_empty());
     }
 
@@ -296,7 +296,7 @@ mod tests {
         assert!(config.financial);
         assert!(config.phone_numbers);
         assert!(config.ner.enabled);
-        assert!(matches!(config.ner.backend, NerBackend::GlinerPii));
+        assert!(matches!(config.ner.backend, NerBackend::DistilBertPii));
         assert!(!config.custom.patterns.is_empty());
         assert!(config.custom.patterns.iter().any(|p| p.name == "case_number"));
         assert!(config.overrides.preserve.contains(&"Supreme Court".to_string()));
@@ -307,7 +307,7 @@ mod tests {
         let config = IndustryProfile::Healthcare.detection_config();
         assert!(config.financial);
         assert!(config.ner.enabled);
-        assert!(matches!(config.ner.backend, NerBackend::GlinerPii));
+        assert!(matches!(config.ner.backend, NerBackend::DistilBertPii));
         assert!(config.custom.patterns.iter().any(|p| p.name == "mrn"));
         assert!(config.custom.patterns.iter().any(|p| p.name == "npi"));
         assert!(config.overrides.preserve.contains(&"FDA".to_string()));
