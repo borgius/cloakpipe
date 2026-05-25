@@ -26,9 +26,9 @@ ip_addresses = true
 urls_internal = true
 
 [detection.ner]
-enabled = false
+enabled = true
 backend = "distilbert_pii"
-confidence_threshold = 0.0
+confidence_threshold = 0.4
 entity_types = []
 sidecar_url = ""
 

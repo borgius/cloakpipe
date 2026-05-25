@@ -14,6 +14,13 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 const GLINER_PIP_PACKAGE: &str = "gliner";
+/// PyTorch's own wheel index. Needed on Python versions (e.g. 3.13) where
+/// torch is not yet published to the main PyPI index.
+const GLINER_TORCH_INDEX: &str = "https://download.pytorch.org/whl/cpu";
+/// Python versions known to have PyTorch wheels, in order of preference.
+/// Python 3.14+ does not have torch wheels yet.
+const TORCH_COMPATIBLE_PYTHONS: &[&str] =
+    &["python3.12", "python3.11", "python3.10", "python3.9", "python3.13"];
 const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
 const GLINER_VENV_DIR: &str = ".cloakpipe/gliner-pii-venv";
 const GLINER_SERVER_SCRIPT: &str = "tools/gliner-pii-server.py";
@@ -57,6 +64,20 @@ fn load_config_or_default(config_path: &str) -> Result<CloakPipeConfig> {
         ConfigSource::BundledPreset(preset) => load_config_file(&preset.path),
         ConfigSource::Missing(_) => Ok(default_config()),
     }
+}
+
+fn scan_output_rel_path(input_is_file: bool, input_path: &Path, file_path: &Path) -> PathBuf {
+    if input_is_file {
+        return file_path
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| file_path.to_path_buf());
+    }
+
+    file_path
+        .strip_prefix(input_path)
+        .unwrap_or(file_path)
+        .to_path_buf()
 }
 
 /// Resolve the vault encryption key from environment variable.
@@ -416,6 +437,7 @@ pub async fn ner(action: crate::NerCommands) -> Result<()> {
 }
 
 fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) -> Result<()> {
+    let user_specified_python = python.is_some();
     let python = PathBuf::from(match python {
         Some(python) => python,
         None if dry_run => "python3".to_string(),
@@ -423,7 +445,17 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
     });
     let venv_dir = default_gliner_venv_dir();
 
-    let install_args = ["-m", "pip", "install", GLINER_PIP_PACKAGE];
+    let install_args = [
+        "-m", "pip", "install",
+        "--prefer-binary",
+        "--extra-index-url", GLINER_TORCH_INDEX,
+        GLINER_PIP_PACKAGE,
+        // torch 2.2.x (latest on x86 macOS) was compiled against NumPy 1.x.
+        "numpy<2",
+        // transformers 4.45+ requires torch>=2.4 (unavailable on x86 macOS)
+        // and introduced a type-annotation bug (NameError: 'nn' not defined).
+        "transformers<4.45",
+    ];
 
     if dry_run {
         println!("NER backend: gliner-pii");
@@ -455,12 +487,29 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
         python
     } else if is_externally_managed_environment(&install_output) {
         println!("Detected an externally managed Python environment.");
+
+        // When the user hasn't pinned a specific Python, prefer a version that
+        // has PyTorch wheels (3.9–3.12). Python 3.14+ has no torch wheels yet.
+        let venv_base_python = if !user_specified_python {
+            let best = find_gliner_venv_python(&python);
+            if best != python {
+                println!(
+                    "Selecting {} for the virtualenv (torch has no wheels for {}).",
+                    best.display(),
+                    python.display()
+                );
+            }
+            best
+        } else {
+            python.clone()
+        };
+
         println!(
             "Falling back to a local virtualenv at {}",
             venv_dir.display()
         );
 
-        let venv_python = ensure_virtualenv(&python, &venv_dir)?;
+        let venv_python = ensure_virtualenv(&venv_base_python, &venv_dir)?;
         println!("  {}", format_command(&venv_python, &install_args));
 
         let venv_install_output = std::process::Command::new(&venv_python)
@@ -474,9 +523,18 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
             })?;
 
         if !venv_install_output.status.success() {
+            let output_text = render_process_output(&venv_install_output);
+            if is_torch_unavailable(&venv_install_output) {
+                bail!(
+                    "GLiNER install failed: torch has no wheel for this Python version.\n\
+                     Tip: specify a compatible Python explicitly, e.g.:\n\
+                     cloakpipe ner install --python python3.12\n\n{}",
+                    output_text
+                );
+            }
             bail!(
                 "GLiNER install failed in the local virtualenv.\n{}",
-                render_process_output(&venv_install_output)
+                output_text
             );
         }
 
@@ -557,6 +615,31 @@ fn detect_python_interpreter() -> Result<String> {
     }
 
     bail!("No Python interpreter found. Install Python 3 or rerun with --python <path>.")
+}
+
+/// Find the best Python for creating the GLiNER virtualenv.
+///
+/// PyTorch has no wheels for Python 3.14+. When the detected system Python is
+/// too new, this returns a known-compatible version instead.
+fn find_gliner_venv_python(default_python: &Path) -> PathBuf {
+    for candidate in TORCH_COMPATIBLE_PYTHONS {
+        if command_available(candidate) {
+            return PathBuf::from(candidate);
+        }
+    }
+    default_python.to_path_buf()
+}
+
+/// Returns true when the pip output signals that torch has no wheel for this
+/// Python version/platform combination.
+fn is_torch_unavailable(output: &std::process::Output) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_ascii_lowercase();
+    combined.contains("no matching distribution") || combined.contains("resolutionimpossible")
 }
 
 fn command_available(command: &str) -> bool {
@@ -649,6 +732,12 @@ fn ensure_virtualenv(base_python: &Path, venv_dir: &Path) -> Result<PathBuf> {
             venv_python.display()
         );
     }
+
+    // Upgrade pip in the new venv (best-effort) so the latest resolver is used.
+    // Old pip bundled with venvs can struggle with complex dependency graphs.
+    let _ = std::process::Command::new(&venv_python)
+        .args(["-m", "pip", "install", "--upgrade", "pip", "--quiet"])
+        .output();
 
     Ok(venv_python)
 }
@@ -793,6 +882,30 @@ mod tests {
         assert_eq!(
             gliner_venv_dir(Path::new("/tmp/cloakpipe")),
             PathBuf::from("/tmp/cloakpipe/.cloakpipe/gliner-pii-venv")
+        );
+    }
+
+    #[test]
+    fn scan_output_rel_path_uses_file_name_for_single_file_inputs() {
+        assert_eq!(
+            scan_output_rel_path(
+                true,
+                Path::new("assets/example.md"),
+                Path::new("assets/example.md")
+            ),
+            PathBuf::from("example.md")
+        );
+    }
+
+    #[test]
+    fn scan_output_rel_path_preserves_relative_path_for_directory_inputs() {
+        assert_eq!(
+            scan_output_rel_path(
+                false,
+                Path::new("assets"),
+                Path::new("assets/examples/example.md")
+            ),
+            PathBuf::from("examples/example.md")
         );
     }
 
@@ -1202,6 +1315,7 @@ pub async fn scan(
     };
 
     let input_path = std::path::Path::new(&input);
+    let input_is_file = input_path.is_file();
     let files = collect_scannable_files(input_path)?;
 
     if files.is_empty() {
@@ -1235,18 +1349,15 @@ pub async fn scan(
         let entity_count = entities.len();
         total_entities += entity_count;
 
-        let rel_path = file_path
-            .strip_prefix(input_path)
-            .unwrap_or(file_path)
-            .to_string_lossy()
-            .to_string();
+        let rel_path = scan_output_rel_path(input_is_file, input_path, file_path);
+        let rel_path_display = rel_path.to_string_lossy().to_string();
 
         if entity_count > 0 {
             total_files += 1;
-            file_results.push((rel_path.clone(), entity_count));
+            file_results.push((rel_path_display.clone(), entity_count));
 
             if detect_only {
-                println!("  {} — {} entities", rel_path, entity_count);
+                println!("  {} — {} entities", rel_path_display, entity_count);
                 for e in &entities {
                     println!(
                         "    [{:?}] \"{}\" (confidence: {:.0}%, source: {:?})",

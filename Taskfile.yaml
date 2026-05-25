@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 vars:
   CLI_CRATE: crates/cloakpipe-cli
@@ -9,7 +9,21 @@ tasks:
     cmds:
       - cargo build --workspace
 
+  diff:
+    desc: Show a diff between assets/example.md and a freshly masked copy
+    cmds:
+      - |
+        tmpdir="$(mktemp -d)"
+        trap 'rm -rf "$tmpdir"' EXIT
+        cargo run --quiet -p cloakpipe-cli -- scan assets/example.md --output "$tmpdir" >/dev/null
+        git --no-pager diff --no-index --color --word-diff=plain assets/example.md "$tmpdir/example.md" || test $? -eq 1
+
   install:
     desc: Install the local cloakpipe CLI from this checkout
     cmds:
       - cargo install --path {{.CLI_CRATE}} --force
+
+  test:
+    desc: Run all unit and integration tests across the workspace
+    cmds:
+      - cargo test --workspace

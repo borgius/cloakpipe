@@ -27,7 +27,8 @@ fn test_ner_install_dry_run() {
         "ner install dry-run should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("Would run: python3 -m pip install gliner"));
+    assert!(stdout.contains("Would run: python3 -m pip install"), "expected pip install command in: {stdout}");
+    assert!(stdout.contains("gliner"), "expected gliner package in: {stdout}");
     assert!(stdout.contains(".cloakpipe/gliner-pii-venv"));
     assert!(stdout.contains("Start the sidecar: cloakpipe ner start"));
     assert!(stdout.contains("backend = \"gliner_pii\""));
@@ -44,7 +45,7 @@ fn test_ner_install_falls_back_to_local_virtualenv_when_python_is_externally_man
         r##"#!/bin/sh
 set -eu
 
-if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ] && [ "$4" = "gliner" ]; then
+if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ]; then
     echo "error: externally-managed-environment" >&2
     exit 1
 fi
@@ -56,7 +57,7 @@ if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
 #!/bin/sh
 set -eu
 
-if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ] && [ "$4" = "gliner" ]; then
+if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ]; then
     exit 0
 fi
 

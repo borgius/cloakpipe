@@ -292,7 +292,7 @@ set -eu
 REAL_PYTHON="{real_python}"
 FAKE_SITE="{fake_site}"
 
-if [ "$#" -ge 4 ] && [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ] && [ "$4" = "gliner" ]; then
+if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ]; then
     case "$0" in
         *gliner-pii-venv*)
             exit 0
@@ -313,7 +313,7 @@ set -eu
 REAL_PYTHON="{real_python}"
 FAKE_SITE="{fake_site}"
 
-if [ "$#" -ge 4 ] && [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ] && [ "$4" = "gliner" ]; then
+if [ "$1" = "-m" ] && [ "$2" = "pip" ] && [ "$3" = "install" ]; then
     exit 0
 fi
 
