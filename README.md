@@ -50,11 +50,11 @@ export OPENAI_BASE_URL=http://localhost:3100/v1
 ### Binary
 
 ```bash
-# Install via cargo
-cargo install cloakpipe
+# Install (release binary first, cargo fallback)
+curl -fsSL https://raw.githubusercontent.com/borgius/cloakpipe/refs/heads/main/install.sh | sh
 
-# Or download the latest release
-curl -fsSL https://cloakpipe.co/install.sh | sh
+# Optional direct cargo install
+cargo install cloakpipe
 
 # Start the proxy
 cloakpipe serve --port 3100
