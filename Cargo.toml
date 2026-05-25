@@ -44,7 +44,7 @@ strsim = "0.11"
 
 # Pattern matching + NER
 regex = "1"
-ort = "2.0.0-rc.12"
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["api-24", "load-dynamic", "ndarray", "tracing"] }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 # Logging + tracing
