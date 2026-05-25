@@ -13,7 +13,7 @@ use cloakpipe_core::{
     vault::Vault,
 };
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::wrapper::Parameters,
     model::{Implementation, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
@@ -29,7 +29,6 @@ pub struct CloakPipeServer {
     config: Arc<RwLock<DetectionConfig>>,
     active_profile: Arc<RwLock<Option<String>>>,
     sessions: Arc<SessionManager>,
-    tool_router: ToolRouter<Self>,
 }
 
 // -- Tool parameter types --
@@ -329,7 +328,6 @@ impl CloakPipeServer {
             config: Arc::new(RwLock::new(detection_config)),
             active_profile: Arc::new(RwLock::new(profile)),
             sessions,
-            tool_router: Self::tool_router(),
         }
     }
 }
@@ -385,7 +383,6 @@ mod tests {
             config: Arc::new(RwLock::new(config)),
             active_profile: Arc::new(RwLock::new(None)),
             sessions: Arc::new(SessionManager::new(Default::default())),
-            tool_router: CloakPipeServer::tool_router(),
         }
     }
 
