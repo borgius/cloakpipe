@@ -83,7 +83,7 @@ jobs:
       - name: Package release artifact
         run: bash tools/ci/package_release_artifact.sh "${{ env.RELEASE_BINARY }}" "${{ needs.prepare_release.outputs.version }}" "${{ matrix.os }}" "${{ matrix.arch }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.RELEASE_BINARY }}-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*.tar.gz
@@ -97,7 +97,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4.1.3
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: ${{ env.RELEASE_BINARY }}-*
