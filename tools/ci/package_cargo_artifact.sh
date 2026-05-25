@@ -10,7 +10,7 @@ if [[ -z "${version}" ]]; then
   exit 1
 fi
 
-cargo package --locked -p "${package_name}"
+cargo package --locked --workspace
 
 crate_path="target/package/${package_name}-${version}.crate"
 asset_path="dist/${asset_name}-${version}.crate"
@@ -21,4 +21,5 @@ if [[ ! -f "${crate_path}" ]]; then
 fi
 
 mkdir -p dist
+find target/package -maxdepth 1 -type f -name '*.crate' -exec cp {} dist/ \;
 cp "${crate_path}" "${asset_path}"

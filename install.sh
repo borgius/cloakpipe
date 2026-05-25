@@ -158,10 +158,10 @@ install_with_cargo() {
   fi
 
   if [ -n "$tag" ]; then
-    cargo install --locked --git "$git_repo_url" --tag "$tag" --bin "${BINARY_NAME}" cloakpipe-cli
+    cargo install --git "$git_repo_url" --tag "$tag" --bin "${BINARY_NAME}" cloakpipe-cli
     log "Installed ${BINARY_NAME} with cargo install --git ${REPO} --tag ${tag} cloakpipe-cli"
   else
-    cargo install --locked --git "$git_repo_url" --bin "${BINARY_NAME}" cloakpipe-cli
+    cargo install --git "$git_repo_url" --bin "${BINARY_NAME}" cloakpipe-cli
     log "Installed ${BINARY_NAME} with cargo install --git ${REPO} cloakpipe-cli"
   fi
 
