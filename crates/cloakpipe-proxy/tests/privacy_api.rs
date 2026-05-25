@@ -6,7 +6,7 @@ use cloakpipe_audit::AuditLogger;
 use cloakpipe_core::{
     config::{
         AuditConfig, CloakPipeConfig, DetectionConfig, LocalConfig, ProxyConfig, TreeConfig,
-        VectorConfig, VaultConfig,
+        VaultConfig, VectorConfig,
     },
     detector::Detector,
     session::SessionConfig,
@@ -199,7 +199,9 @@ async fn test_detect_and_vault_stats_endpoints() {
 
     assert_eq!(status, StatusCode::OK);
     let entities = detected["entities"].as_array().unwrap();
-    assert!(entities.iter().any(|entity| entity["original"] == "bob@example.com"));
+    assert!(entities
+        .iter()
+        .any(|entity| entity["original"] == "bob@example.com"));
 
     let app = build_router(state.clone());
     let (status, _) = json_response(
@@ -287,7 +289,10 @@ async fn test_session_context_endpoint_matches_mcp_shape() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed["total"], 1);
-    assert_eq!(listed["sessions"].as_array().unwrap()[0]["session_id"], "session-123");
+    assert_eq!(
+        listed["sessions"].as_array().unwrap()[0]["session_id"],
+        "session-123"
+    );
 
     let app = build_router(state.clone());
     let (status, inspected) = json_response(

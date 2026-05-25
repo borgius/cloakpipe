@@ -10,16 +10,15 @@ use axum::{
     Json,
 };
 use cloakpipe_core::{
-    config::DetectionConfig,
-    detector::Detector,
-    profiles::IndustryProfile,
-    replacer::Replacer,
-    rehydrator::Rehydrator,
-    PseudoToken,
+    config::DetectionConfig, detector::Detector, profiles::IndustryProfile, rehydrator::Rehydrator,
+    replacer::Replacer, PseudoToken,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -106,20 +105,23 @@ pub async fn api_pseudonymize(
     Json(params): Json<PseudonymizeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let request_id = Uuid::new_v4().to_string();
-    let entities = detect_entities(&state, &params.text)
-        .await
-        .map_err(|e| {
-            tracing::error!(request_id = %request_id, "Detection failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Detection failed: {}", e))
-        })?;
+    let entities = detect_entities(&state, &params.text).await.map_err(|e| {
+        tracing::error!(request_id = %request_id, "Detection failed: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Detection failed: {}", e),
+        )
+    })?;
 
     let response = {
         let mut vault = state.vault.lock().await;
-        let result = Replacer::pseudonymize(&params.text, &entities, &mut vault)
-            .map_err(|e| {
-                tracing::error!(request_id = %request_id, "Pseudonymize failed: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Pseudonymize failed: {}", e))
-            })?;
+        let result = Replacer::pseudonymize(&params.text, &entities, &mut vault).map_err(|e| {
+            tracing::error!(request_id = %request_id, "Pseudonymize failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Pseudonymize failed: {}", e),
+            )
+        })?;
 
         let categories = entity_categories(&entities);
         let _ = state.audit.log_pseudonymize(
@@ -147,13 +149,17 @@ pub async fn api_rehydrate(
     let request_id = Uuid::new_v4().to_string();
     let response = {
         let vault = state.vault.lock().await;
-        let result = Rehydrator::rehydrate(&params.text, &vault)
-            .map_err(|e| {
-                tracing::error!(request_id = %request_id, "Rehydrate failed: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Rehydrate failed: {}", e))
-            })?;
+        let result = Rehydrator::rehydrate(&params.text, &vault).map_err(|e| {
+            tracing::error!(request_id = %request_id, "Rehydrate failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: Rehydrate failed: {}", e),
+            )
+        })?;
 
-        let _ = state.audit.log_rehydrate(&request_id, result.rehydrated_count);
+        let _ = state
+            .audit
+            .log_rehydrate(&request_id, result.rehydrated_count);
 
         RehydrateResponse {
             text: result.text,
@@ -169,12 +175,13 @@ pub async fn api_detect(
     State(state): State<Arc<AppState>>,
     Json(params): Json<DetectRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let entities = detect_entities(&state, &params.text)
-        .await
-        .map_err(|e| {
-            tracing::error!("Detection failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: Detection failed: {}", e))
-        })?;
+    let entities = detect_entities(&state, &params.text).await.map_err(|e| {
+        tracing::error!("Detection failed: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: Detection failed: {}", e),
+        )
+    })?;
 
     Ok(Json(DetectResponse {
         entities: entities
@@ -190,9 +197,7 @@ pub async fn api_detect(
 }
 
 /// Direct privacy endpoint: safe aggregate vault stats.
-pub async fn api_vault_stats(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn api_vault_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let response = {
         let vault = state.vault.lock().await;
         let stats = vault.stats();
@@ -311,15 +316,12 @@ fn extract_session_id(headers: &HeaderMap, id_from: &str) -> Option<String> {
 }
 
 fn require_upstream_api_key(state: &AppState) -> Result<String, (StatusCode, String)> {
-    state
-        .upstream_api_key()
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                state.missing_api_key_message(),
-            )
-        })
+    state.upstream_api_key().map(str::to_owned).ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            state.missing_api_key_message(),
+        )
+    })
 }
 
 /// Proxy handler for /v1/chat/completions.
@@ -348,12 +350,16 @@ pub async fn proxy_chat_completions(
     };
 
     // Pseudonymize message contents (session-aware)
-    let entities_count = pseudonymize_messages(&state, &mut body, &request_id, session_id.as_deref())
-        .await
-        .map_err(|e| {
-            tracing::error!(request_id = %request_id, "Pseudonymization failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Pseudonymization failed: {}", e))
-        })?;
+    let entities_count =
+        pseudonymize_messages(&state, &mut body, &request_id, session_id.as_deref())
+            .await
+            .map_err(|e| {
+                tracing::error!(request_id = %request_id, "Pseudonymization failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Pseudonymization failed: {}", e),
+                )
+            })?;
 
     tracing::info!(
         request_id = %request_id,
@@ -382,7 +388,10 @@ pub async fn proxy_chat_completions(
 
     let upstream_resp = req.send().await.map_err(|e| {
         tracing::error!(request_id = %request_id, "Upstream request failed: {}", e);
-        (StatusCode::BAD_GATEWAY, format!("Upstream request failed: {}", e))
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("Upstream request failed: {}", e),
+        )
     })?;
 
     let status = upstream_resp.status();
@@ -409,11 +418,17 @@ pub async fn proxy_chat_completions(
             .unwrap())
     } else {
         let resp_text = upstream_resp.text().await.map_err(|e| {
-            (StatusCode::BAD_GATEWAY, format!("Failed to read upstream response: {}", e))
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to read upstream response: {}", e),
+            )
         })?;
 
         let mut resp_json: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            (StatusCode::BAD_GATEWAY, format!("Invalid upstream JSON: {}", e))
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Invalid upstream JSON: {}", e),
+            )
         })?;
 
         // --- Response output scanning ---
@@ -466,7 +481,9 @@ pub async fn proxy_chat_completions(
                 {
                     if let Ok(rehydrated) = Rehydrator::rehydrate(&content, &vault) {
                         choice["message"]["content"] = Value::String(rehydrated.text);
-                        let _ = state.audit.log_rehydrate(&request_id, rehydrated.rehydrated_count);
+                        let _ = state
+                            .audit
+                            .log_rehydrate(&request_id, rehydrated.rehydrated_count);
                     }
                 }
             }
@@ -495,7 +512,10 @@ pub async fn proxy_embeddings(
         .await
         .map_err(|e| {
             tracing::error!(request_id = %request_id, "Pseudonymization failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Pseudonymization failed: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Pseudonymization failed: {}", e),
+            )
         })?;
 
     tracing::info!(
@@ -522,7 +542,10 @@ pub async fn proxy_embeddings(
 
     let upstream_resp = req.send().await.map_err(|e| {
         tracing::error!(request_id = %request_id, "Upstream request failed: {}", e);
-        (StatusCode::BAD_GATEWAY, format!("Upstream request failed: {}", e))
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("Upstream request failed: {}", e),
+        )
     })?;
 
     let status = upstream_resp.status();
@@ -542,9 +565,7 @@ pub async fn proxy_embeddings(
 
 // --- Session management endpoints ---
 
-pub async fn sessions_list(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn sessions_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(state.sessions.list_sessions())
 }
 
@@ -552,11 +573,10 @@ pub async fn session_inspect(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    state
-        .sessions
-        .inspect(&session_id)
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, format!("Session {} not found", session_id)))
+    state.sessions.inspect(&session_id).map(Json).ok_or((
+        StatusCode::NOT_FOUND,
+        format!("Session {} not found", session_id),
+    ))
 }
 
 pub async fn session_flush(
@@ -567,9 +587,7 @@ pub async fn session_flush(
     Json(serde_json::json!({ "flushed": flushed, "session_id": session_id }))
 }
 
-pub async fn sessions_flush_all(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn sessions_flush_all(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let count = state.sessions.flush_all();
     Json(serde_json::json!({ "flushed": count }))
 }
@@ -588,7 +606,11 @@ async fn pseudonymize_messages(
 
     if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
         for msg in messages {
-            if let Some(content) = msg.get_mut("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+            if let Some(content) = msg
+                .get_mut("content")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+            {
                 // Check sensitivity escalation before detection
                 if let Some(sid) = session_id {
                     state.sessions.with_session(sid, |ctx| {
@@ -610,13 +632,14 @@ async fn pseudonymize_messages(
                 // Resolve coreferences from session context
                 let mut coref_tokens: Vec<(usize, PseudoToken)> = Vec::new();
                 if let Some(sid) = session_id {
-                    if let Some(coref_results) = state.sessions.with_session_ref(sid, |ctx| {
-                        ctx.resolve_coreferences(&content)
-                    }) {
+                    if let Some(coref_results) = state
+                        .sessions
+                        .with_session_ref(sid, |ctx| ctx.resolve_coreferences(&content))
+                    {
                         for (coref_entity, coref_token) in coref_results {
-                            let overlaps = entities.iter().any(|e| {
-                                coref_entity.start < e.end && coref_entity.end > e.start
-                            });
+                            let overlaps = entities
+                                .iter()
+                                .any(|e| coref_entity.start < e.end && coref_entity.end > e.start);
                             if !overlaps {
                                 let idx = entities.len();
                                 entities.push(coref_entity);
@@ -635,7 +658,8 @@ async fn pseudonymize_messages(
 
                         let mut tokens: Vec<PseudoToken> = Vec::new();
                         for (i, e) in entities.iter().enumerate() {
-                            if let Some((_, token)) = coref_tokens.iter().find(|(idx, _)| *idx == i) {
+                            if let Some((_, token)) = coref_tokens.iter().find(|(idx, _)| *idx == i)
+                            {
                                 tokens.push(token.clone());
                             } else {
                                 tokens.push(vault.get_or_create(&e.original, &e.category));

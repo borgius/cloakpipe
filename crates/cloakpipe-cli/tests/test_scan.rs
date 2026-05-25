@@ -84,3 +84,104 @@ fn test_scan_no_files() {
     assert!(output.status.success());
     assert!(stdout.contains("No scannable files"));
 }
+
+#[test]
+fn test_scan_sample_masks_documented_leaks() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = tempfile::tempdir().unwrap();
+    let output_dir = dir.path().join("example-masked");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .current_dir(&workspace)
+        .args([
+            "--config",
+            "cloakpipe.toml",
+            "scan",
+            "assets/example.md",
+            "-o",
+            output_dir.to_str().unwrap(),
+            "--strategy",
+            "similar",
+        ])
+        .output()
+        .expect("failed to run cloakpipe");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("ONNX Runtime") || stderr.contains("DistilBERT-PII model") {
+            eprintln!("skipping model-backed sample scan assertion: {stderr}");
+            return;
+        }
+    }
+
+    assert!(
+        output.status.success(),
+        "scan should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let masked = fs::read_to_string(output_dir.join("example.md")).unwrap();
+    for original in [
+        "TempPass!2026",
+        "356938035643809",
+        "4455667788990011",
+        "7788990011223344",
+        "4111111111111111",
+        "5555555555554444",
+        "Visa",
+        "Mastercard",
+        "Avery Collins",
+        "Dr. Elena Morris",
+        "Avery Collins Family HSA",
+        "1842 Willow Creek Drive",
+        "Apt 5B",
+        "212-555-0176",
+    ] {
+        assert!(
+            !masked.contains(original),
+            "masked sample leaked {original}"
+        );
+    }
+
+    for placeholder in [
+        "User-",
+        "Org-",
+        "Location-",
+        "DATE_",
+        "PCT-",
+        "ID_NUMBER-",
+        "LICENSE_NUMBER-",
+        "IBAN-",
+        "ROUTING_NUMBER-",
+        "SWIFT_CODE-",
+        "ISIN-",
+    ] {
+        assert!(
+            !masked.contains(placeholder),
+            "similar masking should not emit placeholder family {placeholder}"
+        );
+    }
+
+    let restored_path = dir.path().join("example-restored.md");
+    let masked_path = output_dir.join("example.md");
+    let restore_output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .current_dir(&workspace)
+        .args([
+            "restore",
+            masked_path.to_str().unwrap(),
+            "-o",
+            restored_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run cloakpipe restore");
+
+    assert!(
+        restore_output.status.success(),
+        "restore should succeed: {}",
+        String::from_utf8_lossy(&restore_output.stderr)
+    );
+
+    let original = fs::read_to_string(workspace.join("assets/example.md")).unwrap();
+    let restored = fs::read_to_string(restored_path).unwrap();
+    assert_eq!(restored, original, "restored sample should match original");
+}

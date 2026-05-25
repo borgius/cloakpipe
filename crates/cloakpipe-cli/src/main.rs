@@ -81,6 +81,17 @@ enum Commands {
         #[arg(long, default_value = "0.5")]
         min_confidence: f64,
     },
+    /// Restore a masked file or directory using exported vault mappings
+    Restore {
+        /// Masked input file or directory
+        input: String,
+        /// Output file or directory. File input prints to stdout when omitted.
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Path to vault-mappings.json. Defaults to the input directory.
+        #[arg(short, long)]
+        mappings: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -273,5 +284,10 @@ async fn main() -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::Restore {
+            input,
+            output,
+            mappings,
+        } => commands::restore(input, output, mappings).await,
     }
 }

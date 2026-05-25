@@ -21,7 +21,7 @@ secrets = true
 financial = true
 dates = true
 emails = true
-phone_numbers = false
+phone_numbers = true
 ip_addresses = true
 urls_internal = true
 

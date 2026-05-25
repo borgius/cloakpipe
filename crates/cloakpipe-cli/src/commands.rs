@@ -7,9 +7,11 @@ use crate::presets::{
 use anyhow::{bail, Context, Result};
 use cloakpipe_audit::AuditLogger;
 use cloakpipe_core::{
-    config::CloakPipeConfig, detector::Detector, replacer::Replacer, vault::Vault,
+    config::CloakPipeConfig, detector::Detector, rehydrator::Rehydrator, replacer::Replacer,
+    vault::Vault,
 };
 use cloakpipe_proxy::{server, state::AppState};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -19,8 +21,13 @@ const GLINER_PIP_PACKAGE: &str = "gliner";
 const GLINER_TORCH_INDEX: &str = "https://download.pytorch.org/whl/cpu";
 /// Python versions known to have PyTorch wheels, in order of preference.
 /// Python 3.14+ does not have torch wheels yet.
-const TORCH_COMPATIBLE_PYTHONS: &[&str] =
-    &["python3.12", "python3.11", "python3.10", "python3.9", "python3.13"];
+const TORCH_COMPATIBLE_PYTHONS: &[&str] = &[
+    "python3.12",
+    "python3.11",
+    "python3.10",
+    "python3.9",
+    "python3.13",
+];
 const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
 const GLINER_VENV_DIR: &str = ".cloakpipe/gliner-pii-venv";
 const GLINER_SERVER_SCRIPT: &str = "tools/gliner-pii-server.py";
@@ -449,7 +456,10 @@ async fn download_distilbert_pii(force: bool) -> Result<()> {
     let project_root = find_gliner_project_root(&current_dir)?;
     let script = project_root.join(DISTILBERT_DOWNLOAD_SCRIPT);
     if !script.exists() {
-        bail!("Download script not found: {}\nRun from the CloakPipe project root.", script.display());
+        bail!(
+            "Download script not found: {}\nRun from the CloakPipe project root.",
+            script.display()
+        );
     }
 
     let mut cmd = std::process::Command::new("bash");
@@ -481,9 +491,12 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
     let venv_dir = default_gliner_venv_dir();
 
     let install_args = [
-        "-m", "pip", "install",
+        "-m",
+        "pip",
+        "install",
         "--prefer-binary",
-        "--extra-index-url", GLINER_TORCH_INDEX,
+        "--extra-index-url",
+        GLINER_TORCH_INDEX,
         GLINER_PIP_PACKAGE,
         // torch 2.2.x (latest on x86 macOS) was compiled against NumPy 1.x.
         "numpy<2",
@@ -1454,6 +1467,83 @@ pub async fn scan(
     }
 
     Ok(())
+}
+
+/// Restore masked files using the `vault-mappings.json` produced by `scan`.
+pub async fn restore(
+    input: String,
+    output: Option<String>,
+    mappings: Option<String>,
+) -> Result<()> {
+    let input_path = Path::new(&input);
+    if !input_path.exists() {
+        bail!("Path does not exist: {}", input_path.display());
+    }
+
+    let mappings_path = mappings
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_restore_mappings_path(input_path));
+    let mappings = load_restore_mappings(&mappings_path)?;
+
+    if input_path.is_file() {
+        let content = std::fs::read_to_string(input_path)
+            .with_context(|| format!("Cannot read: {}", input_path.display()))?;
+        let restored = Rehydrator::rehydrate_from_mappings(&content, &mappings)?.text;
+        if let Some(output) = output {
+            std::fs::write(&output, restored).with_context(|| format!("Cannot write: {output}"))?;
+            println!("Restored 1 file to {output}");
+        } else {
+            print!("{restored}");
+        }
+        return Ok(());
+    }
+
+    let output_dir = output.unwrap_or_else(|| format!("{}-restored", input.trim_end_matches('/')));
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("Cannot create output dir: {output_dir}"))?;
+
+    let files = collect_scannable_files(input_path)?;
+    let mut restored_count = 0usize;
+    for file_path in files {
+        if file_path
+            .file_name()
+            .is_some_and(|name| name == "vault-mappings.json")
+        {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&file_path)
+            .with_context(|| format!("Cannot read: {}", file_path.display()))?;
+        let restored = Rehydrator::rehydrate_from_mappings(&content, &mappings)?.text;
+        let rel_path = file_path.strip_prefix(input_path).unwrap_or(&file_path);
+        let out_path = Path::new(&output_dir).join(rel_path);
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&out_path, restored)?;
+        restored_count += 1;
+    }
+
+    println!("Restored {restored_count} files to {output_dir}");
+    Ok(())
+}
+
+fn default_restore_mappings_path(input_path: &Path) -> PathBuf {
+    if input_path.is_file() {
+        input_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("vault-mappings.json")
+    } else {
+        input_path.join("vault-mappings.json")
+    }
+}
+
+fn load_restore_mappings(path: &Path) -> Result<HashMap<String, String>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Cannot read mappings: {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("Invalid mappings JSON: {}", path.display()))
 }
 
 /// Collect scannable text files from a path (file or directory).

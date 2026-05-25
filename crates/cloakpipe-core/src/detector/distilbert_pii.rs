@@ -21,38 +21,70 @@ use tracing::{debug, info};
 /// IOB2 labels for ab-ai/pii_model_based_on_distilbert (65 labels).
 const LABELS: &[&str] = &[
     "O",
-    "B-FIRSTNAME", "I-FIRSTNAME",
-    "B-CITY", "I-CITY",
-    "B-AGE", "I-AGE",
-    "B-EMAIL", "I-EMAIL",
-    "B-USERNAME", "I-USERNAME",
-    "B-DATE", "I-DATE",
-    "B-URL", "I-URL",
-    "B-PIN", "I-PIN",
-    "B-DOB", "I-DOB",
-    "B-LASTNAME", "I-LASTNAME",
-    "B-COMPANYNAME", "I-COMPANYNAME",
-    "B-ACCOUNTNAME", "I-ACCOUNTNAME",
-    "B-MIDDLENAME", "I-MIDDLENAME",
-    "B-IBAN", "I-IBAN",
-    "B-CREDITCARDNUMBER", "I-CREDITCARDNUMBER",
-    "B-CREDITCARDISSUER", "I-CREDITCARDISSUER",
-    "B-SSN", "I-SSN",
-    "B-GENDER", "I-GENDER",
-    "B-COUNTY", "I-COUNTY",
-    "B-STATE", "I-STATE",
-    "B-SEX", "I-SEX",
-    "B-AMOUNT", "I-AMOUNT",
-    "B-PREFIX", "I-PREFIX",
-    "B-ACCOUNTNUMBER", "I-ACCOUNTNUMBER",
-    "B-PHONENUMBER", "I-PHONENUMBER",
-    "B-ZIPCODE", "I-ZIPCODE",
-    "B-PHONEIMEI", "I-PHONEIMEI",
-    "B-PASSWORD", "I-PASSWORD",
-    "B-BUILDINGNUMBER", "I-BUILDINGNUMBER",
-    "B-STREET", "I-STREET",
-    "B-SECONDARYADDRESS", "I-SECONDARYADDRESS",
-    "B-CREDITCARDCVV", "I-CREDITCARDCVV",
+    "B-FIRSTNAME",
+    "I-FIRSTNAME",
+    "B-CITY",
+    "I-CITY",
+    "B-AGE",
+    "I-AGE",
+    "B-EMAIL",
+    "I-EMAIL",
+    "B-USERNAME",
+    "I-USERNAME",
+    "B-DATE",
+    "I-DATE",
+    "B-URL",
+    "I-URL",
+    "B-PIN",
+    "I-PIN",
+    "B-DOB",
+    "I-DOB",
+    "B-LASTNAME",
+    "I-LASTNAME",
+    "B-COMPANYNAME",
+    "I-COMPANYNAME",
+    "B-ACCOUNTNAME",
+    "I-ACCOUNTNAME",
+    "B-MIDDLENAME",
+    "I-MIDDLENAME",
+    "B-IBAN",
+    "I-IBAN",
+    "B-CREDITCARDNUMBER",
+    "I-CREDITCARDNUMBER",
+    "B-CREDITCARDISSUER",
+    "I-CREDITCARDISSUER",
+    "B-SSN",
+    "I-SSN",
+    "B-GENDER",
+    "I-GENDER",
+    "B-COUNTY",
+    "I-COUNTY",
+    "B-STATE",
+    "I-STATE",
+    "B-SEX",
+    "I-SEX",
+    "B-AMOUNT",
+    "I-AMOUNT",
+    "B-PREFIX",
+    "I-PREFIX",
+    "B-ACCOUNTNUMBER",
+    "I-ACCOUNTNUMBER",
+    "B-PHONENUMBER",
+    "I-PHONENUMBER",
+    "B-ZIPCODE",
+    "I-ZIPCODE",
+    "B-PHONEIMEI",
+    "I-PHONEIMEI",
+    "B-PASSWORD",
+    "I-PASSWORD",
+    "B-BUILDINGNUMBER",
+    "I-BUILDINGNUMBER",
+    "B-STREET",
+    "I-STREET",
+    "B-SECONDARYADDRESS",
+    "I-SECONDARYADDRESS",
+    "B-CREDITCARDCVV",
+    "I-CREDITCARDCVV",
 ];
 
 /// Map IOB2 label to CloakPipe EntityCategory.
@@ -65,20 +97,21 @@ fn label_to_category(label: &str) -> EntityCategory {
     match entity_type {
         "FIRSTNAME" | "LASTNAME" | "MIDDLENAME" | "PREFIX" => EntityCategory::Person,
         "COMPANYNAME" => EntityCategory::Organization,
-        "CITY" | "STATE" | "COUNTY" | "ZIPCODE" | "BUILDINGNUMBER"
-        | "STREET" | "SECONDARYADDRESS" => EntityCategory::Location,
+        "CITY" | "STATE" | "COUNTY" | "ZIPCODE" | "BUILDINGNUMBER" | "STREET"
+        | "SECONDARYADDRESS" => EntityCategory::Location,
         "DATE" | "DOB" => EntityCategory::Date,
         "EMAIL" => EntityCategory::Email,
         "PHONENUMBER" => EntityCategory::PhoneNumber,
         "URL" => EntityCategory::Url,
         "SSN" => EntityCategory::Custom("SSN".into()),
-        "CREDITCARDNUMBER" | "CREDITCARDCVV" | "CREDITCARDISSUER" => {
-            EntityCategory::Custom("CREDIT_CARD".into())
-        }
-        "ACCOUNTNUMBER" | "ACCOUNTNAME" | "IBAN" => {
-            EntityCategory::Custom("ACCOUNT_NUMBER".into())
-        }
-        "PASSWORD" | "PIN" => EntityCategory::Secret,
+        "CREDITCARDNUMBER" => EntityCategory::Custom("CREDIT_CARD".into()),
+        "CREDITCARDCVV" => EntityCategory::Custom("CARD_VERIFICATION_CODE".into()),
+        "CREDITCARDISSUER" => EntityCategory::Custom("CREDIT_CARD_ISSUER".into()),
+        "ACCOUNTNUMBER" => EntityCategory::Custom("ACCOUNT_NUMBER".into()),
+        "ACCOUNTNAME" => EntityCategory::Person,
+        "IBAN" => EntityCategory::Custom("IBAN".into()),
+        "PASSWORD" => EntityCategory::Secret,
+        "PIN" => EntityCategory::Custom("PIN".into()),
         "AMOUNT" => EntityCategory::Amount,
         "USERNAME" => EntityCategory::Custom("USERNAME".into()),
         "PHONEIMEI" => EntityCategory::Custom("DEVICE_ID".into()),
@@ -130,7 +163,11 @@ impl DistilBertPiiDetector {
             .map_err(|e| anyhow::anyhow!("Failed to set threads: {}", e))?
             .commit_from_file(model_path)
             .map_err(|e| {
-                anyhow::anyhow!("Failed to load DistilBERT-PII model '{}': {}", model_path, e)
+                anyhow::anyhow!(
+                    "Failed to load DistilBERT-PII model '{}': {}",
+                    model_path,
+                    e
+                )
             })?;
 
         // Find tokenizer.json: check model dir first, then parent (for quantized/ subdir)
@@ -146,8 +183,9 @@ impl DistilBertPiiDetector {
                 .join("tokenizer.json")
         };
 
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer from {:?}: {}", tokenizer_path, e))?;
+        let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+            anyhow::anyhow!("Failed to load tokenizer from {:?}: {}", tokenizer_path, e)
+        })?;
 
         info!(
             "DistilBERT-PII loaded: {} labels, threshold={:.2}",
@@ -164,6 +202,24 @@ impl DistilBertPiiDetector {
 
     pub fn detect(&self, text: &str) -> Result<Vec<DetectedEntity>> {
         if text.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut entities = Vec::new();
+        for (start, end) in chunk_ranges(text, 1_800, 240) {
+            entities.extend(self.detect_chunk(&text[start..end], start)?);
+        }
+
+        entities.sort_by_key(|entity| entity.start);
+        entities = deduplicate_overlapping_entities(entities);
+        entities = merge_name_entities(entities);
+
+        debug!("DistilBERT-PII detected {} entities", entities.len());
+        Ok(entities)
+    }
+
+    fn detect_chunk(&self, text: &str, base_offset: usize) -> Result<Vec<DetectedEntity>> {
+        if text.trim().is_empty() {
             return Ok(Vec::new());
         }
 
@@ -211,7 +267,16 @@ impl DistilBertPiiDetector {
         for (i, token) in tokens.iter().enumerate() {
             if token == "[CLS]" || token == "[SEP]" || token == "[PAD]" {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(&mut entities, text, &text_val, start, end, conf, cat);
+                    push_entity(
+                        &mut entities,
+                        text,
+                        &text_val,
+                        start,
+                        end,
+                        base_offset,
+                        conf,
+                        cat,
+                    );
                 }
                 continue;
             }
@@ -230,7 +295,16 @@ impl DistilBertPiiDetector {
 
             if (confidence as f64) < self.confidence_threshold {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(&mut entities, text, &text_val, start, end, conf, cat);
+                    push_entity(
+                        &mut entities,
+                        text,
+                        &text_val,
+                        start,
+                        end,
+                        base_offset,
+                        conf,
+                        cat,
+                    );
                 }
                 continue;
             }
@@ -239,7 +313,16 @@ impl DistilBertPiiDetector {
 
             if label.starts_with("B-") {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(&mut entities, text, &text_val, start, end, conf, cat);
+                    push_entity(
+                        &mut entities,
+                        text,
+                        &text_val,
+                        start,
+                        end,
+                        base_offset,
+                        conf,
+                        cat,
+                    );
                 }
                 let category = label_to_category(label);
                 let entity_text = &text[off_start..off_end];
@@ -273,8 +356,13 @@ impl DistilBertPiiDetector {
                         ),
                         EntityCategory::Location => matches!(
                             expected_type,
-                            "CITY" | "STATE" | "COUNTY" | "ZIPCODE" | "BUILDINGNUMBER"
-                                | "STREET" | "SECONDARYADDRESS"
+                            "CITY"
+                                | "STATE"
+                                | "COUNTY"
+                                | "ZIPCODE"
+                                | "BUILDINGNUMBER"
+                                | "STREET"
+                                | "SECONDARYADDRESS"
                         ),
                         _ => label_to_category(label) == *cat,
                     };
@@ -286,7 +374,7 @@ impl DistilBertPiiDetector {
                         *conf = (*conf + confidence as f64) / 2.0;
                     } else {
                         let (tv, s, e, c, ct) = current.take().unwrap();
-                        push_entity(&mut entities, text, &tv, s, e, c, ct);
+                        push_entity(&mut entities, text, &tv, s, e, base_offset, c, ct);
                         let category = label_to_category(label);
                         let entity_text = &text[off_start..off_end];
                         current = Some((
@@ -301,21 +389,75 @@ impl DistilBertPiiDetector {
             } else {
                 // O label
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(&mut entities, text, &text_val, start, end, conf, cat);
+                    push_entity(
+                        &mut entities,
+                        text,
+                        &text_val,
+                        start,
+                        end,
+                        base_offset,
+                        conf,
+                        cat,
+                    );
                 }
             }
         }
 
         if let Some((text_val, start, end, conf, cat)) = current.take() {
-            push_entity(&mut entities, text, &text_val, start, end, conf, cat);
+            push_entity(
+                &mut entities,
+                text,
+                &text_val,
+                start,
+                end,
+                base_offset,
+                conf,
+                cat,
+            );
         }
 
-        // Merge adjacent FIRSTNAME + LASTNAME into single Person entity
-        entities = merge_name_entities(entities);
-
-        debug!("DistilBERT-PII detected {} entities", entities.len());
         Ok(entities)
     }
+}
+
+fn chunk_ranges(text: &str, max_len: usize, overlap: usize) -> Vec<(usize, usize)> {
+    if text.len() <= max_len {
+        return vec![(0, text.len())];
+    }
+
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    while start < text.len() {
+        let mut end = next_char_boundary(text, (start + max_len).min(text.len()));
+        if end < text.len() {
+            if let Some(relative_break) = text[start..end].rfind(['\n', '.', ' ', ',']) {
+                let candidate = start + relative_break + 1;
+                if candidate > start + max_len / 2 {
+                    end = candidate;
+                }
+            }
+        }
+
+        ranges.push((start, end));
+        if end == text.len() {
+            break;
+        }
+
+        let next_start = end.saturating_sub(overlap);
+        start = next_char_boundary(text, next_start);
+        if start >= end {
+            start = end;
+        }
+    }
+
+    ranges
+}
+
+fn next_char_boundary(text: &str, mut index: usize) -> usize {
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
 }
 
 fn push_entity(
@@ -324,6 +466,7 @@ fn push_entity(
     text: &str,
     start: usize,
     end: usize,
+    base_offset: usize,
     confidence: f64,
     category: EntityCategory,
 ) {
@@ -331,14 +474,41 @@ fn push_entity(
     if trimmed.is_empty() || start >= end {
         return;
     }
+
+    if category == EntityCategory::PhoneNumber
+        && trimmed.chars().filter(|c| c.is_ascii_digit()).count() < 7
+    {
+        return;
+    }
+
     entities.push(DetectedEntity {
         original: trimmed.to_string(),
-        start,
-        end,
+        start: base_offset + start,
+        end: base_offset + end,
         category,
         confidence,
         source: DetectionSource::Ner,
     });
+}
+
+fn deduplicate_overlapping_entities(entities: Vec<DetectedEntity>) -> Vec<DetectedEntity> {
+    let mut result: Vec<DetectedEntity> = Vec::with_capacity(entities.len());
+    for entity in entities {
+        if let Some(last) = result.last() {
+            if entity.start < last.end {
+                let replace = entity.confidence > last.confidence
+                    || (entity.confidence == last.confidence
+                        && (entity.end - entity.start) > (last.end - last.start));
+                if replace {
+                    result.pop();
+                    result.push(entity);
+                }
+                continue;
+            }
+        }
+        result.push(entity);
+    }
+    result
 }
 
 /// Merge adjacent Person entities (FIRSTNAME + LASTNAME) into full names.
@@ -352,7 +522,8 @@ fn merge_name_entities(entities: Vec<DetectedEntity>) -> Vec<DetectedEntity> {
                     let gap = entity.start.saturating_sub(last.end);
                     if gap <= 2 {
                         // Merge: extend last entity
-                        last.original = format!("{} {}", last.original.trim(), entity.original.trim());
+                        last.original =
+                            format!("{} {}", last.original.trim(), entity.original.trim());
                         last.end = entity.end;
                         last.confidence = (last.confidence + entity.confidence) / 2.0;
                         continue;
@@ -393,11 +564,20 @@ mod tests {
         assert_eq!(label_to_category("B-FIRSTNAME"), EntityCategory::Person);
         assert_eq!(label_to_category("I-LASTNAME"), EntityCategory::Person);
         assert_eq!(label_to_category("B-EMAIL"), EntityCategory::Email);
-        assert_eq!(label_to_category("B-SSN"), EntityCategory::Custom("SSN".into()));
+        assert_eq!(
+            label_to_category("B-SSN"),
+            EntityCategory::Custom("SSN".into())
+        );
         assert_eq!(label_to_category("B-CITY"), EntityCategory::Location);
         assert_eq!(label_to_category("B-STREET"), EntityCategory::Location);
-        assert_eq!(label_to_category("B-PHONENUMBER"), EntityCategory::PhoneNumber);
-        assert_eq!(label_to_category("B-COMPANYNAME"), EntityCategory::Organization);
+        assert_eq!(
+            label_to_category("B-PHONENUMBER"),
+            EntityCategory::PhoneNumber
+        );
+        assert_eq!(
+            label_to_category("B-COMPANYNAME"),
+            EntityCategory::Organization
+        );
         assert_eq!(label_to_category("B-AMOUNT"), EntityCategory::Amount);
         assert_eq!(label_to_category("B-PASSWORD"), EntityCategory::Secret);
     }

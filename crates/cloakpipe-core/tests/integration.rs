@@ -1,12 +1,14 @@
 //! Integration tests for the CloakPipe core pipeline.
 
 use cloakpipe_core::{
-    config::{CloakPipeConfig, CustomConfig, CustomPattern, DetectionConfig, NerConfig, OverrideConfig},
+    config::{
+        CloakPipeConfig, CustomConfig, CustomPattern, DetectionConfig, NerConfig, OverrideConfig,
+    },
     detector::Detector,
-    replacer::Replacer,
     rehydrator::Rehydrator,
+    replacer::Replacer,
     vault::Vault,
-    EntityCategory,
+    EntityCategory, MaskingStrategy,
 };
 use std::{fs, path::Path};
 
@@ -37,15 +39,25 @@ fn load_policy_config(name: &str) -> CloakPipeConfig {
 }
 
 fn has_custom_category(entities: &[cloakpipe_core::DetectedEntity], category: &str) -> bool {
-    entities.iter().any(|entity| {
-        matches!(&entity.category, EntityCategory::Custom(name) if name == category)
-    })
+    entities
+        .iter()
+        .any(|entity| matches!(&entity.category, EntityCategory::Custom(name) if name == category))
+}
+
+fn load_workspace_config() -> CloakPipeConfig {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cloakpipe.toml");
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read config {}: {}", path.display(), err));
+    toml::from_str(&content)
+        .unwrap_or_else(|err| panic!("failed to parse config {}: {}", path.display(), err))
 }
 
 #[test]
 fn test_detect_email() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
-    let entities = detector.detect("Contact alice@example.com for details").unwrap();
+    let entities = detector
+        .detect("Contact alice@example.com for details")
+        .unwrap();
     assert_eq!(entities.len(), 1);
     assert_eq!(entities[0].original, "alice@example.com");
     assert_eq!(entities[0].category, EntityCategory::Email);
@@ -55,28 +67,38 @@ fn test_detect_email() {
 fn test_detect_aws_key() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
     let entities = detector.detect("Key: AKIAIOSFODNN7EXAMPLE").unwrap();
-    assert!(entities.iter().any(|e| e.category == EntityCategory::Secret));
+    assert!(entities
+        .iter()
+        .any(|e| e.category == EntityCategory::Secret));
 }
 
 #[test]
 fn test_detect_ip_address() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
     let entities = detector.detect("Server at 192.168.1.100 is down").unwrap();
-    assert!(entities.iter().any(|e| e.category == EntityCategory::IpAddress));
+    assert!(entities
+        .iter()
+        .any(|e| e.category == EntityCategory::IpAddress));
 }
 
 #[test]
 fn test_detect_currency_amount() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
     let entities = detector.detect("Revenue was $1.2M this quarter").unwrap();
-    assert!(entities.iter().any(|e| e.category == EntityCategory::Amount));
+    assert!(entities
+        .iter()
+        .any(|e| e.category == EntityCategory::Amount));
 }
 
 #[test]
 fn test_detect_percentage() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
-    let entities = detector.detect("Growth rate: 15.3% year-over-year").unwrap();
-    assert!(entities.iter().any(|e| e.category == EntityCategory::Percentage));
+    let entities = detector
+        .detect("Growth rate: 15.3% year-over-year")
+        .unwrap();
+    assert!(entities
+        .iter()
+        .any(|e| e.category == EntityCategory::Percentage));
 }
 
 #[test]
@@ -116,7 +138,9 @@ fn test_disable_financial_and_dates() {
 #[test]
 fn test_detect_internal_url() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
-    let entities = detector.detect("Check https://internal.corp.com/api/status").unwrap();
+    let entities = detector
+        .detect("Check https://internal.corp.com/api/status")
+        .unwrap();
     assert!(entities.iter().any(|e| e.category == EntityCategory::Url));
 }
 
@@ -125,7 +149,9 @@ fn test_detect_jwt() {
     let detector = Detector::from_config(&test_detection_config()).unwrap();
     let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
     let entities = detector.detect(&format!("Token: {}", jwt)).unwrap();
-    assert!(entities.iter().any(|e| e.category == EntityCategory::Secret));
+    assert!(entities
+        .iter()
+        .any(|e| e.category == EntityCategory::Secret));
 }
 
 #[test]
@@ -244,6 +270,120 @@ fn test_pci_policy_detects_cardholder_data() {
     assert!(has_custom_category(&entities, "CARD_VERIFICATION_CODE"));
 }
 
+#[test]
+fn test_detects_structured_sample_credentials_and_demographics() {
+    let config = load_workspace_config();
+    let detector = Detector::from_config(&config.detection).unwrap();
+    let input =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/example.md"))
+            .unwrap();
+    let entities = detector.detect(&input).unwrap();
+
+    for expected in [
+        "TempPass!2026",
+        "4821",
+        "356938035643809",
+        "4455667788990011",
+        "7788990011223344",
+        "4111111111111111",
+        "5555555555554444",
+        "Visa",
+        "321",
+        "female",
+        "woman",
+        "42",
+        "Avery Collins",
+        "Dr. Elena Morris",
+        "Northwind Community Health",
+        "Cedar Ridge Family Medicine",
+        "Meridian Harbor Insurance",
+        "1842 Willow Creek Drive",
+        "Apt 5B",
+        "Fairview",
+        "Oregon",
+        "Jefferson",
+        "97035",
+    ] {
+        assert!(
+            entities.iter().any(|entity| entity.original == expected),
+            "expected detector to find {expected}"
+        );
+    }
+}
+
+#[test]
+fn test_similar_masking_removes_structured_sample_leaks_and_placeholders() {
+    let config = load_workspace_config();
+    let detector = Detector::from_config(&config.detection).unwrap();
+    let input =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/example.md"))
+            .unwrap();
+    let entities = detector.detect(&input).unwrap();
+    let mut vault = Vault::ephemeral();
+    let masked = Replacer::pseudonymize_with_strategy(
+        &input,
+        &entities,
+        &mut vault,
+        MaskingStrategy::Similar,
+    )
+    .unwrap()
+    .text;
+
+    let leak_inventory = [
+        ("credential", "TempPass!2026"),
+        ("credential", "4821"),
+        ("device identifier", "356938035643809"),
+        ("account/card data", "4455667788990011"),
+        ("account/card data", "7788990011223344"),
+        ("account/card data", "4111111111111111"),
+        ("account/card data", "5555555555554444"),
+        ("account/card data", "Visa"),
+        ("account/card data", "321"),
+        ("demographic", "female"),
+        ("demographic", "woman"),
+        ("demographic", "42"),
+        ("person", "Avery Collins"),
+        ("person", "Dr. Elena Morris"),
+        ("organization", "Northwind Community Health"),
+        ("organization", "Cedar Ridge Family Medicine"),
+        ("organization", "Meridian Harbor Insurance"),
+        ("location", "1842 Willow Creek Drive"),
+        ("location", "Apt 5B"),
+        ("location", "Fairview"),
+        ("location", "Oregon"),
+        ("location", "Jefferson"),
+        ("location", "97035"),
+        ("URL/email/phone/IP", "212-555-0176"),
+        ("healthcare/business identifier", "MRN-2026-443821"),
+    ];
+
+    for (category, original) in leak_inventory {
+        assert!(
+            !masked.contains(original),
+            "masked output leaked {category} value {original}"
+        );
+    }
+
+    for placeholder in [
+        "User-",
+        "Org-",
+        "Location-",
+        "DATE_",
+        "PCT-",
+        "ID_NUMBER-",
+        "LICENSE_NUMBER-",
+        "IBAN-",
+        "ROUTING_NUMBER-",
+        "SWIFT_CODE-",
+        "ISIN-",
+    ] {
+        assert!(
+            !masked.contains(placeholder),
+            "similar masking should not emit placeholder family {placeholder}"
+        );
+    }
+}
+
 // --- Pseudonymize + Rehydrate roundtrip ---
 
 #[test]
@@ -319,7 +459,8 @@ fn test_streaming_rehydration_complete_token() {
     vault.get_or_create("Acme Corp", &EntityCategory::Organization);
 
     let mut buffer = String::new();
-    let (output, matched) = Rehydrator::rehydrate_chunk("The company ORG_1 reported", &mut buffer, &vault).unwrap();
+    let (output, matched) =
+        Rehydrator::rehydrate_chunk("The company ORG_1 reported", &mut buffer, &vault).unwrap();
     assert!(matched);
     assert!(output.contains("Acme Corp"));
 }

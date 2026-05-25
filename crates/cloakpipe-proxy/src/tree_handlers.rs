@@ -7,24 +7,18 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use cloakpipe_tree::{
-    TreeIndexer, TreeSearcher,
-    storage::TreeStorage,
-};
+use cloakpipe_tree::{storage::TreeStorage, TreeIndexer, TreeSearcher};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
 fn require_upstream_api_key(state: &AppState) -> Result<String, (StatusCode, String)> {
-    state
-        .upstream_api_key()
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                state.missing_api_key_message(),
-            )
-        })
+    state.upstream_api_key().map(str::to_owned).ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            state.missing_api_key_message(),
+        )
+    })
 }
 
 // --- Request/Response types ---
@@ -126,12 +120,21 @@ pub async fn tree_index_text(
     let tree = indexer
         .build_index_from_text(&req.name, &req.text)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Indexing failed: {}", e)))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Indexing failed: {}", e),
+            )
+        })?;
 
     // Save to storage
     let storage_path = &tree_config.storage_path;
-    TreeStorage::save(&tree, storage_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage failed: {}", e)))?;
+    TreeStorage::save(&tree, storage_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage failed: {}", e),
+        )
+    })?;
 
     let nav = tree.navigation_map();
     Ok(Json(IndexResponse {
@@ -141,14 +144,17 @@ pub async fn tree_index_text(
         total_pages: tree.total_pages,
         node_count: tree.node_count(),
         max_depth: tree.max_depth(),
-        navigation: nav.into_iter().map(|e| NavigationItem {
-            id: e.id,
-            title: e.title,
-            summary: e.summary,
-            depth: e.depth,
-            pages: e.pages,
-            has_children: e.has_children,
-        }).collect(),
+        navigation: nav
+            .into_iter()
+            .map(|e| NavigationItem {
+                id: e.id,
+                title: e.title,
+                summary: e.summary,
+                depth: e.depth,
+                pages: e.pages,
+                has_children: e.has_children,
+            })
+            .collect(),
     }))
 }
 
@@ -169,13 +175,19 @@ pub async fn tree_index_file(
         state.config.proxy.upstream.clone(),
     );
 
-    let tree = indexer
-        .build_index(file_path)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Indexing failed: {}", e)))?;
+    let tree = indexer.build_index(file_path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Indexing failed: {}", e),
+        )
+    })?;
 
-    TreeStorage::save(&tree, &tree_config.storage_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage failed: {}", e)))?;
+    TreeStorage::save(&tree, &tree_config.storage_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage failed: {}", e),
+        )
+    })?;
 
     let nav = tree.navigation_map();
     Ok(Json(IndexResponse {
@@ -185,14 +197,17 @@ pub async fn tree_index_file(
         total_pages: tree.total_pages,
         node_count: tree.node_count(),
         max_depth: tree.max_depth(),
-        navigation: nav.into_iter().map(|e| NavigationItem {
-            id: e.id,
-            title: e.title,
-            summary: e.summary,
-            depth: e.depth,
-            pages: e.pages,
-            has_children: e.has_children,
-        }).collect(),
+        navigation: nav
+            .into_iter()
+            .map(|e| NavigationItem {
+                id: e.id,
+                title: e.title,
+                summary: e.summary,
+                depth: e.depth,
+                pages: e.pages,
+                has_children: e.has_children,
+            })
+            .collect(),
     }))
 }
 
@@ -202,8 +217,12 @@ pub async fn tree_list(
 ) -> Result<Json<Vec<TreeListItem>>, (StatusCode, String)> {
     let storage_path = &state.config.tree.storage_path;
 
-    let trees_raw = TreeStorage::list(storage_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("List failed: {}", e)))?;
+    let trees_raw = TreeStorage::list(storage_path).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("List failed: {}", e),
+        )
+    })?;
 
     let mut items = Vec::new();
     for (id, _source) in trees_raw {
@@ -240,14 +259,17 @@ pub async fn tree_get(
         total_pages: tree.total_pages,
         node_count: tree.node_count(),
         max_depth: tree.max_depth(),
-        navigation: nav.into_iter().map(|e| NavigationItem {
-            id: e.id,
-            title: e.title,
-            summary: e.summary,
-            depth: e.depth,
-            pages: e.pages,
-            has_children: e.has_children,
-        }).collect(),
+        navigation: nav
+            .into_iter()
+            .map(|e| NavigationItem {
+                id: e.id,
+                title: e.title,
+                summary: e.summary,
+                depth: e.depth,
+                pages: e.pages,
+                has_children: e.has_children,
+            })
+            .collect(),
     }))
 }
 
@@ -270,21 +292,31 @@ pub async fn tree_search(
         state.config.tree.search_model.clone(),
     );
 
-    let result = searcher
-        .search(&tree, &req.query)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Search failed: {}", e)))?;
+    let result = searcher.search(&tree, &req.query).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Search failed: {}", e),
+        )
+    })?;
 
     // Extract content from matched nodes
     // Re-parse document for extraction (or load cached pages)
-    let extracted = result.node_ids.iter().filter_map(|id| {
-        tree.find_node(id).map(|node| ExtractedItem {
-            node_id: node.id.clone(),
-            title: node.title.clone(),
-            text: node.summary.as_ref().map(|s| s.text.clone()).unwrap_or_default(),
-            pages: node.pages,
+    let extracted = result
+        .node_ids
+        .iter()
+        .filter_map(|id| {
+            tree.find_node(id).map(|node| ExtractedItem {
+                node_id: node.id.clone(),
+                title: node.title.clone(),
+                text: node
+                    .summary
+                    .as_ref()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default(),
+                pages: node.pages,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(SearchResponse {
         node_ids: result.node_ids,
@@ -318,12 +350,24 @@ pub async fn tree_query(
         let tree = indexer
             .build_index_from_text(name, text)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Indexing failed: {}", e)))?;
-        TreeStorage::save(&tree, storage_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage failed: {}", e)))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Indexing failed: {}", e),
+                )
+            })?;
+        TreeStorage::save(&tree, storage_path).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Storage failed: {}", e),
+            )
+        })?;
         tree
     } else {
-        return Err((StatusCode::BAD_REQUEST, "Either tree_id or text required".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Either tree_id or text required".to_string(),
+        ));
     };
 
     // Search
@@ -333,25 +377,47 @@ pub async fn tree_query(
         tree_config.search_model.clone(),
     );
 
-    let search_result = searcher
-        .search(&tree, &req.query)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Search failed: {}", e)))?;
+    let search_result = searcher.search(&tree, &req.query).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Search failed: {}", e),
+        )
+    })?;
 
     // Build extracted items from node summaries/titles
-    let sources: Vec<ExtractedItem> = search_result.node_ids.iter().filter_map(|id| {
-        tree.find_node(id).map(|node| ExtractedItem {
-            node_id: node.id.clone(),
-            title: node.title.clone(),
-            text: node.summary.as_ref().map(|s| s.text.clone()).unwrap_or_default(),
-            pages: node.pages,
+    let sources: Vec<ExtractedItem> = search_result
+        .node_ids
+        .iter()
+        .filter_map(|id| {
+            tree.find_node(id).map(|node| ExtractedItem {
+                node_id: node.id.clone(),
+                title: node.title.clone(),
+                text: node
+                    .summary
+                    .as_ref()
+                    .map(|s| s.text.clone())
+                    .unwrap_or_default(),
+                pages: node.pages,
+            })
         })
-    }).collect();
+        .collect();
 
     // Build context from extracted content
-    let context: String = sources.iter().enumerate().map(|(i, s)| {
-        format!("[Source {} | {} | Pages {}-{}]\n{}", i + 1, s.title, s.pages.0, s.pages.1, s.text)
-    }).collect::<Vec<_>>().join("\n\n");
+    let context: String = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            format!(
+                "[Source {} | {} | Pages {}-{}]\n{}",
+                i + 1,
+                s.title,
+                s.pages.0,
+                s.pages.1,
+                s.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     // Generate answer
     let answer_prompt = format!(
@@ -382,10 +448,20 @@ pub async fn tree_query(
         .json(&answer_body)
         .send()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("LLM request failed: {}", e)))?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("LLM request failed: {}", e),
+            )
+        })?
         .json::<Value>()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Invalid LLM response: {}", e)))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Invalid LLM response: {}", e),
+            )
+        })?;
 
     let answer = response["choices"][0]["message"]["content"]
         .as_str()

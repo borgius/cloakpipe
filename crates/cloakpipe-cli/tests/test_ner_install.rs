@@ -27,8 +27,14 @@ fn test_ner_install_dry_run() {
         "ner install dry-run should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("Would run: python3 -m pip install"), "expected pip install command in: {stdout}");
-    assert!(stdout.contains("gliner"), "expected gliner package in: {stdout}");
+    assert!(
+        stdout.contains("Would run: python3 -m pip install"),
+        "expected pip install command in: {stdout}"
+    );
+    assert!(
+        stdout.contains("gliner"),
+        "expected gliner package in: {stdout}"
+    );
     assert!(stdout.contains(".cloakpipe/gliner-pii-venv"));
     assert!(stdout.contains("Start the sidecar: cloakpipe ner start"));
     assert!(stdout.contains("backend = \"gliner_pii\""));

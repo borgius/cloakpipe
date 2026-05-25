@@ -17,7 +17,7 @@ static FAKE_DOMAINS: &[&str] = &[
 ];
 
 static FAKE_NAMES: &[&str] = &[
-    "alex", "jordan", "taylor", "morgan", "casey", "riley", "chris", "lee", "dana", "jamie",
+    "alex", "harper", "taylor", "morgan", "casey", "riley", "chris", "lee", "dana", "jamie",
 ];
 
 static FAKE_SURNAMES: &[&str] = &[
@@ -55,6 +55,12 @@ pub fn generate(original: &str, category: &EntityCategory, id: u32) -> String {
 /// Generate a plausible fake value that preserves the original value's structure.
 pub fn generate_similar(original: &str, category: &EntityCategory, id: u32) -> String {
     match category {
+        EntityCategory::Person => fake_person(original, id),
+        EntityCategory::Organization => fake_organization(original, id),
+        EntityCategory::Location => fake_location(original, id),
+        EntityCategory::Date => fake_similar_date(original, id),
+        EntityCategory::Percentage => fake_percentage(original, id),
+        EntityCategory::Amount => fake_amount(original, id),
         EntityCategory::PhoneNumber => fake_similar_phone(original, id),
         EntityCategory::Email => fake_similar_email(original, id),
         EntityCategory::IpAddress => fake_similar_ip(id),
@@ -62,6 +68,25 @@ pub fn generate_similar(original: &str, category: &EntityCategory, id: u32) -> S
         EntityCategory::Custom(name) => match name.to_uppercase().as_str() {
             "SSN" | "SOCIAL_SECURITY_NUMBER" => fake_ssn(id),
             "CREDIT_CARD" | "CREDIT_CARD_NUMBER" | "PAYMENT_CARD" => fake_credit_card(original, id),
+            "ID_NUMBER" | "LICENSE_NUMBER" | "NPI" | "MRN" | "DEA" => {
+                fake_digits_preserving_literals(original, id)
+            }
+            "IBAN" => fake_iban(original, id),
+            "ROUTING_NUMBER" | "ABA_ROUTING_NUMBER" => {
+                fake_digits_preserving_literals(original, id)
+            }
+            "SWIFT_CODE" | "BIC" => fake_swift_code(original, id),
+            "ISIN" => fake_isin(original, id),
+            "ACCOUNT_NUMBER" | "BANK_ACCOUNT" | "ACCOUNTNAME" => fake_account_number(original, id),
+            "USERNAME" => fake_username(original, id),
+            "DEVICE_ID" | "PHONEIMEI" | "IMEI" => fake_imei(original, id),
+            "PIN" => fake_digits_preserving_literals(original, id),
+            "CARD_VERIFICATION_CODE" | "CREDIT_CARD_CVV" | "CVV" | "CVC" => {
+                fake_digits_preserving_literals(original, id)
+            }
+            "CREDIT_CARD_ISSUER" => fake_card_issuer(original, id),
+            "AGE" => fake_age(original, id),
+            "GENDER" | "SEX" => fake_demographic_word(original, id),
             _ => generate(original, category, id),
         },
         _ => generate(original, category, id),
@@ -100,6 +125,14 @@ fn seeded_char(id: u32, offset: usize, chars: &[u8]) -> char {
     chars[seeded_index(id, offset, chars.len())] as char
 }
 
+fn title_case(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 fn fake_similar_email(original: &str, id: u32) -> String {
     let name = FAKE_NAMES[seeded_index(id, 0, FAKE_NAMES.len())];
     let surname = FAKE_SURNAMES[seeded_index(id, 1, FAKE_SURNAMES.len())];
@@ -127,6 +160,297 @@ fn fake_similar_phone(original: &str, id: u32) -> String {
     apply_digit_format(original, &replacements)
 }
 
+fn fake_person(original: &str, id: u32) -> String {
+    let trimmed = original.trim();
+    let (prefix, name) = trimmed
+        .strip_prefix("Dr. ")
+        .map(|name| ("Dr. ", name))
+        .unwrap_or(("", trimmed));
+    let words: Vec<&str> = name.split_whitespace().collect();
+    if words.is_empty() {
+        return format!(
+            "{}{}",
+            prefix,
+            title_case(FAKE_NAMES[seeded_index(id, 0, FAKE_NAMES.len())])
+        );
+    }
+
+    let first = title_case(FAKE_NAMES[seeded_index(id, 0, FAKE_NAMES.len())]);
+    let last = title_case(FAKE_SURNAMES[seeded_index(id, 1, FAKE_SURNAMES.len())]);
+    let fake = match words.len() {
+        1 => first,
+        2 => format!("{first} {last}"),
+        _ => {
+            let mut parts = vec![first, last];
+            parts.extend(words.iter().skip(2).enumerate().map(|(idx, word)| {
+                if word.chars().all(|c| c.is_ascii_uppercase()) {
+                    (*word).to_string()
+                } else {
+                    title_case(FAKE_NAMES[seeded_index(id, idx + 2, FAKE_NAMES.len())])
+                }
+            }));
+            parts.join(" ")
+        }
+    };
+
+    ensure_changed(trimmed, format!("{prefix}{fake}"), id)
+}
+
+fn fake_organization(original: &str, id: u32) -> String {
+    let roots = [
+        "Summit Valley",
+        "Harbor Point",
+        "Pioneer Grove",
+        "Evergreen Ridge",
+        "Meridian Crest",
+        "Clearwater Lane",
+    ];
+    let suffix = organization_suffix(original).unwrap_or("Group");
+    ensure_changed(
+        original.trim(),
+        format!("{} {suffix}", roots[seeded_index(id, 2, roots.len())]),
+        id,
+    )
+}
+
+fn organization_suffix(original: &str) -> Option<&'static str> {
+    let upper = original.to_ascii_uppercase();
+    if upper.contains("HEALTH") {
+        Some("Health")
+    } else if upper.contains("INSURANCE") {
+        Some("Insurance")
+    } else if upper.contains("MEDICINE") {
+        Some("Medicine")
+    } else if upper.contains("CLINIC") {
+        Some("Clinic")
+    } else if upper.contains("HOSPITAL") {
+        Some("Hospital")
+    } else {
+        None
+    }
+}
+
+fn fake_location(original: &str, id: u32) -> String {
+    let trimmed = original.trim();
+    if trimmed.chars().all(|c| c.is_ascii_digit()) && trimmed.len() == 5 {
+        return format!("{:05}", 10000 + (id * 7919 % 89999));
+    }
+
+    if trimmed.to_ascii_lowercase().starts_with("apt ") {
+        let unit = 1 + (id * 7 % 89);
+        let letter = seeded_char(id, 4, b"ABCDEFGHJKLMNPQRSTUVWXYZ");
+        return format!("Apt {unit}{letter}");
+    }
+
+    if trimmed.chars().any(|c| c.is_ascii_digit()) {
+        let street_names = ["Maple Ridge", "Cedar Lake", "Pine Hollow", "Oak Meadow"];
+        let suffix = street_suffix(trimmed).unwrap_or("Street");
+        let number = 1000 + (id * 137 % 8999);
+        return ensure_changed(
+            trimmed,
+            format!(
+                "{number} {} {suffix}",
+                street_names[seeded_index(id, 3, street_names.len())]
+            ),
+            id,
+        );
+    }
+
+    let states = ["Colorado", "Vermont", "Michigan", "Virginia", "Arizona"];
+    if is_us_state(trimmed) {
+        return ensure_changed(
+            trimmed,
+            states[seeded_index(id, 5, states.len())].to_string(),
+            id,
+        );
+    }
+
+    let places = [
+        "Riverton",
+        "Ashland",
+        "Brookfield",
+        "Franklin",
+        "Lakeside",
+        "Georgetown",
+    ];
+    ensure_changed(
+        trimmed,
+        places[seeded_index(id, 6, places.len())].to_string(),
+        id,
+    )
+}
+
+fn street_suffix(original: &str) -> Option<&'static str> {
+    let upper = original.to_ascii_uppercase();
+    if upper.ends_with(" DRIVE") {
+        Some("Drive")
+    } else if upper.ends_with(" ROAD") {
+        Some("Road")
+    } else if upper.ends_with(" AVENUE") {
+        Some("Avenue")
+    } else if upper.ends_with(" STREET") {
+        Some("Street")
+    } else if upper.ends_with(" LANE") {
+        Some("Lane")
+    } else {
+        None
+    }
+}
+
+fn is_us_state(value: &str) -> bool {
+    matches!(
+        value,
+        "Alabama"
+            | "Alaska"
+            | "Arizona"
+            | "Arkansas"
+            | "California"
+            | "Colorado"
+            | "Connecticut"
+            | "Delaware"
+            | "Florida"
+            | "Georgia"
+            | "Hawaii"
+            | "Idaho"
+            | "Illinois"
+            | "Indiana"
+            | "Iowa"
+            | "Kansas"
+            | "Kentucky"
+            | "Louisiana"
+            | "Maine"
+            | "Maryland"
+            | "Massachusetts"
+            | "Michigan"
+            | "Minnesota"
+            | "Mississippi"
+            | "Missouri"
+            | "Montana"
+            | "Nebraska"
+            | "Nevada"
+            | "New Hampshire"
+            | "New Jersey"
+            | "New Mexico"
+            | "New York"
+            | "North Carolina"
+            | "North Dakota"
+            | "Ohio"
+            | "Oklahoma"
+            | "Oregon"
+            | "Pennsylvania"
+            | "Rhode Island"
+            | "South Carolina"
+            | "South Dakota"
+            | "Tennessee"
+            | "Texas"
+            | "Utah"
+            | "Vermont"
+            | "Virginia"
+            | "Washington"
+            | "West Virginia"
+            | "Wisconsin"
+            | "Wyoming"
+    )
+}
+
+fn fake_similar_date(original: &str, id: u32) -> String {
+    let trimmed = original.trim();
+    if let Some(fake) = fake_iso_date(trimmed, id) {
+        return fake;
+    }
+    if let Some(fake) = fake_slash_date(trimmed, id) {
+        return fake;
+    }
+    if let Some(fake) = fake_month_date(trimmed, id) {
+        return fake;
+    }
+    if let Some(fake) = fake_fiscal_period(trimmed, id) {
+        return fake;
+    }
+    let year = 2024 + (id * 3 % 8);
+    let month = 1 + (id * 5 % 12);
+    let day = 1 + (id * 7 % 28);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn fake_iso_date(original: &str, id: u32) -> Option<String> {
+    let parts: Vec<&str> = original.split('-').collect();
+    if parts.len() != 3 || parts[0].len() != 4 || parts[1].len() != 2 || parts[2].len() != 2 {
+        return None;
+    }
+    let year = 1980 + (id * 3 % 45);
+    let month = 1 + (id * 5 % 12);
+    let day = 1 + (id * 7 % 28);
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+fn fake_slash_date(original: &str, id: u32) -> Option<String> {
+    let parts: Vec<&str> = original.split('/').collect();
+    if parts.len() != 3
+        || !parts
+            .iter()
+            .all(|part| part.chars().all(|c| c.is_ascii_digit()))
+    {
+        return None;
+    }
+    let month = 1 + (id * 5 % 12);
+    let day = 1 + (id * 7 % 28);
+    let year = 2024 + (id * 3 % 8);
+    Some(format!("{month:02}/{day:02}/{year:04}"))
+}
+
+fn fake_month_date(original: &str, id: u32) -> Option<String> {
+    let months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let original_month = months.iter().find(|month| original.starts_with(**month))?;
+    let month_idx = (months
+        .iter()
+        .position(|month| month == original_month)
+        .unwrap_or(0)
+        + id as usize)
+        % months.len();
+    let day = 1 + (id * 7 % 28);
+    let year = 2024 + (id * 3 % 8);
+    Some(format!("{} {day}, {year}", months[month_idx]))
+}
+
+fn fake_fiscal_period(original: &str, id: u32) -> Option<String> {
+    if let Some(year) = original.strip_prefix("FY") {
+        if year.chars().all(|c| c.is_ascii_digit()) {
+            return Some(format!("FY{}", 2024 + (id * 3 % 8)));
+        }
+    }
+
+    let mut parts = original.split_whitespace();
+    let quarter = parts.next()?;
+    let year = parts.next()?;
+    if !matches!(quarter, "Q1" | "Q2" | "Q3" | "Q4") || !year.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("Q{} {}", 1 + (id % 4), 2024 + (id * 3 % 8)))
+}
+
+fn fake_percentage(original: &str, id: u32) -> String {
+    let value = 5 + (id * 13 % 90);
+    if original.contains('.') {
+        format!("{value}.{}%", id * 7 % 10)
+    } else {
+        format!("{value}%")
+    }
+}
+
 fn fake_ssn(id: u32) -> String {
     let area = 100 + (id * 37 % 799);
     let group = 10 + (id * 53 % 89);
@@ -150,6 +474,165 @@ fn fake_credit_card(original: &str, id: u32) -> String {
     }
 
     apply_digit_format(original, &digits)
+}
+
+fn fake_digits_preserving_literals(original: &str, id: u32) -> String {
+    let mut digit_offset = 0usize;
+    ensure_changed(
+        original,
+        original
+            .chars()
+            .map(|c| {
+                if c.is_ascii_digit() {
+                    let digit = seeded_digit(id, digit_offset);
+                    digit_offset += 1;
+                    digit
+                } else {
+                    c
+                }
+            })
+            .collect(),
+        id,
+    )
+}
+
+fn fake_iban(original: &str, id: u32) -> String {
+    let mut alnum_offset = 0usize;
+    ensure_changed(
+        original,
+        original
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    let fake = if alnum_offset < 2 && c.is_ascii_alphabetic() {
+                        c
+                    } else {
+                        fake_like_char(c, id, alnum_offset)
+                    };
+                    alnum_offset += 1;
+                    fake
+                } else {
+                    c
+                }
+            })
+            .collect(),
+        id,
+    )
+}
+
+fn fake_swift_code(original: &str, id: u32) -> String {
+    let mut offset = 0usize;
+    ensure_changed(
+        original,
+        original
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    let fake = fake_like_char(c, id, offset);
+                    offset += 1;
+                    fake
+                } else {
+                    c
+                }
+            })
+            .collect(),
+        id,
+    )
+}
+
+fn fake_isin(original: &str, id: u32) -> String {
+    let mut offset = 0usize;
+    ensure_changed(
+        original,
+        original
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    let fake = if offset < 2 && c.is_ascii_alphabetic() {
+                        c
+                    } else {
+                        fake_like_char(c, id, offset)
+                    };
+                    offset += 1;
+                    fake
+                } else {
+                    c
+                }
+            })
+            .collect(),
+        id,
+    )
+}
+
+fn fake_account_number(original: &str, id: u32) -> String {
+    if original.chars().any(|c| c.is_ascii_digit()) {
+        return fake_digits_preserving_literals(original, id);
+    }
+    fake_username(original, id)
+}
+
+fn fake_username(original: &str, id: u32) -> String {
+    let name = FAKE_NAMES[seeded_index(id, 3, FAKE_NAMES.len())];
+    let surname = FAKE_SURNAMES[seeded_index(id, 4, FAKE_SURNAMES.len())];
+    let digit_count = original
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .count()
+        .min(6);
+    let digits: String = (0..digit_count).map(|i| seeded_digit(id, i + 5)).collect();
+    let separator = if original.contains('_') { '_' } else { '.' };
+    ensure_changed(original, format!("{name}{separator}{surname}{digits}"), id)
+}
+
+fn fake_imei(original: &str, id: u32) -> String {
+    let digits: Vec<char> = original.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() != 15 {
+        return fake_digits_preserving_literals(original, id);
+    }
+
+    let mut fake_digits: Vec<char> = (0..15).map(|i| seeded_digit(id, i + 9)).collect();
+    fake_digits[14] = luhn_check_digit(&fake_digits[..14]);
+    apply_digit_format(original, &fake_digits)
+}
+
+fn fake_card_issuer(original: &str, id: u32) -> String {
+    let issuers = ["Discover", "American Express"];
+    let mut fake = issuers[seeded_index(id, 6, issuers.len())].to_string();
+    if fake.eq_ignore_ascii_case(original.trim()) {
+        fake = issuers[(seeded_index(id, 6, issuers.len()) + 1) % issuers.len()].to_string();
+    }
+    fake
+}
+
+fn fake_age(original: &str, id: u32) -> String {
+    if original.chars().all(|c| c.is_ascii_digit()) {
+        return format!("{}", 21 + (id * 7 % 58));
+    }
+    fake_digits_preserving_literals(original, id)
+}
+
+fn fake_demographic_word(original: &str, id: u32) -> String {
+    let values = ["nonbinary", "undisclosed"];
+    let mut fake = values[seeded_index(id, 7, values.len())].to_string();
+    if fake.eq_ignore_ascii_case(original.trim()) {
+        fake = values[(seeded_index(id, 7, values.len()) + 1) % values.len()].to_string();
+    }
+    fake
+}
+
+fn ensure_changed(original: &str, mut fake: String, id: u32) -> String {
+    if fake != original {
+        return fake;
+    }
+
+    if let Some((idx, c)) = fake.char_indices().find(|(_, c)| c.is_ascii_digit()) {
+        let replacement = ((c.to_digit(10).unwrap_or(0) + 1 + id % 8) % 10).to_string();
+        fake.replace_range(idx..idx + c.len_utf8(), &replacement);
+    } else if let Some((idx, c)) = fake.char_indices().find(|(_, c)| c.is_ascii_alphabetic()) {
+        let replacement = if c.is_ascii_uppercase() { 'X' } else { 'x' }.to_string();
+        fake.replace_range(idx..idx + c.len_utf8(), &replacement);
+    }
+    fake
 }
 
 fn luhn_check_digit(prefix: &[char]) -> char {
@@ -399,6 +882,48 @@ mod tests {
     }
 
     #[test]
+    fn generate_similar_returns_plausible_builtin_values() {
+        let cases = [
+            (
+                "Avery Collins",
+                EntityCategory::Person,
+                r"^[A-Z][a-z]+ [A-Z][a-z]+$",
+            ),
+            (
+                "Northwind Community Health",
+                EntityCategory::Organization,
+                r"^[A-Z][A-Za-z]+ [A-Z][A-Za-z]+ Health$",
+            ),
+            (
+                "1842 Willow Creek Drive",
+                EntityCategory::Location,
+                r"^\d{4} [A-Z][a-z]+ [A-Z][a-z]+ Drive$",
+            ),
+            ("1984-07-16", EntityCategory::Date, r"^\d{4}-\d{2}-\d{2}$"),
+            (
+                "July 16, 1984",
+                EntityCategory::Date,
+                r"^[A-Z][a-z]+ \d{1,2}, \d{4}$",
+            ),
+            ("20%", EntityCategory::Percentage, r"^\d{1,2}%$"),
+        ];
+
+        for (original, category, pattern) in cases {
+            let fake = generate_similar(original, &category, 1);
+            assert_ne!(fake, original);
+            assert!(
+                regex::Regex::new(pattern).unwrap().is_match(&fake),
+                "{fake} should match {pattern}"
+            );
+            assert!(!fake.contains("User-"));
+            assert!(!fake.contains("Org-"));
+            assert!(!fake.contains("Location-"));
+            assert!(!fake.contains("DATE_"));
+            assert!(!fake.contains("PCT-"));
+        }
+    }
+
+    #[test]
     fn generate_similar_returns_plausible_ssn() {
         let fake = generate_similar("927-83-6041", &EntityCategory::Custom("SSN".into()), 1);
         assert_eq!(fake.len(), "927-83-6041".len());
@@ -418,6 +943,89 @@ mod tests {
             "Similar card should preserve card type"
         );
         assert_ne!(fake, "4890 1234 5678 9012");
+    }
+
+    #[test]
+    fn generate_similar_returns_plausible_custom_identifiers() {
+        let cases = [
+            (
+                "MRN-2026-443821",
+                EntityCategory::Custom("ID_NUMBER".into()),
+                r"^MRN-\d{4}-\d{6}$",
+            ),
+            (
+                "CRC-1330841",
+                EntityCategory::Custom("LICENSE_NUMBER".into()),
+                r"^CRC-\d{7}$",
+            ),
+            (
+                "NPI 1184729934",
+                EntityCategory::Custom("LICENSE_NUMBER".into()),
+                r"^NPI \d{10}$",
+            ),
+            (
+                "GB82WEST12345698765432",
+                EntityCategory::Custom("IBAN".into()),
+                r"^GB[A-Z0-9]{20}$",
+            ),
+            (
+                "021000021",
+                EntityCategory::Custom("ROUTING_NUMBER".into()),
+                r"^\d{9}$",
+            ),
+            (
+                "DEUTDEFF500",
+                EntityCategory::Custom("SWIFT_CODE".into()),
+                r"^[A-Z0-9]{11}$",
+            ),
+            (
+                "US0378331005",
+                EntityCategory::Custom("ISIN".into()),
+                r"^US[A-Z0-9]{10}$",
+            ),
+            (
+                "4455667788990011",
+                EntityCategory::Custom("ACCOUNT_NUMBER".into()),
+                r"^\d{16}$",
+            ),
+            (
+                "avery.collins42",
+                EntityCategory::Custom("USERNAME".into()),
+                r"^[a-z]+\.[a-z]+\d{2}$",
+            ),
+            (
+                "356938035643809",
+                EntityCategory::Custom("DEVICE_ID".into()),
+                r"^\d{15}$",
+            ),
+            ("4821", EntityCategory::Custom("PIN".into()), r"^\d{4}$"),
+            (
+                "321",
+                EntityCategory::Custom("CARD_VERIFICATION_CODE".into()),
+                r"^\d{3}$",
+            ),
+        ];
+
+        for (original, category, pattern) in cases {
+            let fake = generate_similar(original, &category, 1);
+            assert_ne!(fake, original);
+            assert!(
+                regex::Regex::new(pattern).unwrap().is_match(&fake),
+                "{fake} should match {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn generate_similar_returns_plausible_card_issuer() {
+        let fake = generate_similar(
+            "Visa",
+            &EntityCategory::Custom("CREDIT_CARD_ISSUER".into()),
+            1,
+        );
+
+        assert_ne!(fake, "Visa");
+        assert!(["Mastercard", "Discover", "American Express"].contains(&fake.as_str()));
     }
 
     #[test]

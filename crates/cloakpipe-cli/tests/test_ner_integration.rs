@@ -54,7 +54,9 @@ async fn test_ner_install_and_start_expose_working_sidecar() {
     let body = detected.json::<serde_json::Value>().await.unwrap();
     let entities = body["entities"].as_array().unwrap();
     assert!(entities.iter().any(|entity| entity["label"] == "person"));
-    assert!(entities.iter().any(|entity| entity["label"] == "company_name"));
+    assert!(entities
+        .iter()
+        .any(|entity| entity["label"] == "company_name"));
     assert!(entities.iter().any(|entity| entity["label"] == "city"));
     assert!(entities.iter().any(|entity| entity["label"] == "date"));
 }
@@ -122,8 +124,7 @@ impl NerFixture {
         fs::create_dir_all(&tools_dir)?;
         fs::create_dir_all(&fake_site)?;
         fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tools/gliner-pii-server.py"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/gliner-pii-server.py"),
             tools_dir.join("gliner-pii-server.py"),
         )?;
         fs::write(fake_site.join("gliner.py"), fake_gliner_module())?;
@@ -156,11 +157,10 @@ impl NerFixture {
         let install_stdout = String::from_utf8_lossy(&install_output.stdout);
         assert!(install_stdout.contains("Falling back to a local virtualenv"));
         assert!(install_stdout.contains("Installed gliner successfully."));
-        assert!(
-            self.project_root()
-                .join(".cloakpipe/gliner-pii-venv/bin/python")
-                .exists()
-        );
+        assert!(self
+            .project_root()
+            .join(".cloakpipe/gliner-pii-venv/bin/python")
+            .exists());
 
         let port = free_port();
         let child = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
