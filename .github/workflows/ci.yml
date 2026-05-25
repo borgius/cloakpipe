@@ -25,9 +25,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace -- -D warnings
+      - run: bash tools/ci/run_workspace_checks.sh
 
   prepare_release:
     if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
@@ -45,65 +43,11 @@ jobs:
           fetch-depth: 0
 
       - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        run: bash tools/ci/configure_git.sh
 
       - id: bump
         name: Bump workspace version
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          import tomllib
-          from pathlib import Path
-
-          root = Path("Cargo.toml")
-          cargo = tomllib.loads(root.read_text())
-          current = cargo["workspace"]["package"]["version"]
-          major, minor, _patch = map(int, current.split("."))
-          updated = f"{major}.{minor + 1}.0"
-
-          root_text = root.read_text()
-          root.write_text(
-              re.sub(
-                  rf'(^version = "){re.escape(current)}(")$',
-                  rf"\g<1>{updated}\2",
-                  root_text,
-                  count=1,
-                  flags=re.MULTILINE,
-              )
-          )
-
-          for manifest in Path("crates").glob("*/Cargo.toml"):
-              manifest_text = manifest.read_text()
-              manifest.write_text(
-                  re.sub(
-                      rf'(path = "\.\./[^"]+", version = "){re.escape(current)}(")',
-                      rf"\g<1>{updated}\2",
-                      manifest_text,
-                  )
-              )
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as github_output:
-              github_output.write(f"version={updated}\n")
-              github_output.write(f"tag=v{updated}\n")
-          PY
-
-          version="$(python - <<'PY'
-          import tomllib
-          from pathlib import Path
-
-          print(tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"])
-          PY
-          )"
-          tag="v${version}"
-
-          git add Cargo.toml crates/*/Cargo.toml
-          git commit -m "chore(release): bump version to ${tag}"
-          git push origin HEAD:main
-
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: bash tools/ci/prepare_release.sh
 
   build_release:
     if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
@@ -134,15 +78,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release -p cloakpipe-cli --bin ${{ env.RELEASE_BINARY }}
+        run: bash tools/ci/build_release_binary.sh "${{ env.RELEASE_BINARY }}"
 
       - name: Package release artifact
-        run: |
-          archive_name="${{ env.RELEASE_BINARY }}-${{ needs.prepare_release.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}"
-          mkdir -p "dist/${archive_name}"
-          cp "target/release/${{ env.RELEASE_BINARY }}" "dist/${archive_name}/${{ env.RELEASE_BINARY }}"
-          cp -R policies "dist/${archive_name}/policies"
-          tar -C dist -czf "dist/${archive_name}.tar.gz" "${archive_name}"
+        run: bash tools/ci/package_release_artifact.sh "${{ env.RELEASE_BINARY }}" "${{ needs.prepare_release.outputs.version }}" "${{ matrix.os }}" "${{ matrix.arch }}"
 
       - uses: actions/upload-artifact@v4
         with:

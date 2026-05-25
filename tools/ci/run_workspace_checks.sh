@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
