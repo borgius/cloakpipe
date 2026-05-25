@@ -92,8 +92,10 @@ pub struct PseudonymizedText {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaskingStrategy {
-    /// Standard tokens: PERSON_001, EMAIL_002, etc. (default)
+    /// Plausible fake values with the same structure as the original.
     #[default]
+    Similar,
+    /// Standard tokens: PERSON_001, EMAIL_002, etc.
     Token,
     /// Format-preserving: fake phone numbers, emails, Aadhaar, etc.
     FormatPreserving,

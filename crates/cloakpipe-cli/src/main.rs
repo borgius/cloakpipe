@@ -71,8 +71,8 @@ enum Commands {
         /// Output directory for masked files (default: <input>-masked)
         #[arg(short, long)]
         output: Option<String>,
-        /// Masking strategy: token or format-preserving
-        #[arg(long, default_value = "token")]
+        /// Masking strategy: similar, token, or format-preserving
+        #[arg(long, default_value = "similar")]
         strategy: String,
         /// Only detect, don't mask (prints report)
         #[arg(long)]
