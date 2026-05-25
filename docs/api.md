@@ -8,6 +8,9 @@ Use the main installer (release binary first, then `cargo install` fallback):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/borgius/cloakpipe/refs/heads/main/install.sh | sh
+
+# Or install the borgius cargo package directly
+cargo install --git https://github.com/borgius/cloakpipe --bin cloakpipe cloakpipe-cli
 ```
 
 Two quick notes before you copy old examples from elsewhere:

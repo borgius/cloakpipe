@@ -149,21 +149,22 @@ install_from_release() {
 
 install_with_cargo() {
   binary_path=""
+  git_repo_url="https://github.com/${REPO}.git"
+  tag="$(download_latest_tag || true)"
 
   if ! command -v cargo >/dev/null 2>&1; then
     log "cargo is required for fallback install, but it was not found."
     return 1
   fi
 
-  if cargo install --locked cloakpipe >/dev/null 2>&1; then
-    log "Installed ${BINARY_NAME} with cargo install cloakpipe"
-    binary_path="$(resolve_installed_binary || true)"
-    [ -n "$binary_path" ] && preinstall_bundled_presets "$binary_path"
-    return 0
+  if [ -n "$tag" ]; then
+    cargo install --locked --git "$git_repo_url" --tag "$tag" --bin "${BINARY_NAME}" cloakpipe-cli
+    log "Installed ${BINARY_NAME} with cargo install --git ${REPO} --tag ${tag} cloakpipe-cli"
+  else
+    cargo install --locked --git "$git_repo_url" --bin "${BINARY_NAME}" cloakpipe-cli
+    log "Installed ${BINARY_NAME} with cargo install --git ${REPO} cloakpipe-cli"
   fi
 
-  cargo install --locked cloakpipe-cli
-  log "Installed ${BINARY_NAME} with cargo install cloakpipe-cli"
   binary_path="$(resolve_installed_binary || true)"
   [ -n "$binary_path" ] && preinstall_bundled_presets "$binary_path"
 }
