@@ -2,6 +2,14 @@
 
 This document describes the HTTP endpoints that the current server actually registers in source. The route list comes from `crates/cloakpipe-proxy/src/server.rs`, and the behavior details come from `crates/cloakpipe-proxy/src/handlers.rs` and `crates/cloakpipe-proxy/src/tree_handlers.rs`.
 
+## Install CloakPipe
+
+Use the main installer (release binary first, then `cargo install` fallback):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/borgius/cloakpipe/refs/heads/main/install.sh | sh
+```
+
 Two quick notes before you copy old examples from elsewhere:
 
 - The current tree routes live under `/tree/...`, not `/v1/tree/...`.
