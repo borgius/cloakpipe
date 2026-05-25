@@ -8,6 +8,34 @@ log() {
   printf '%s\n' "$*"
 }
 
+preinstall_bundled_presets() {
+  binary_path="$1"
+
+  if "$binary_path" presets install >/dev/null 2>&1; then
+    log "Installed bundled presets for ${BINARY_NAME}"
+    return 0
+  fi
+
+  log "Warning: could not preinstall bundled presets. Run '${binary_path} presets install' manually."
+  return 0
+}
+
+resolve_installed_binary() {
+  if command -v "$BINARY_NAME" >/dev/null 2>&1; then
+    command -v "$BINARY_NAME"
+    return 0
+  fi
+
+  cargo_home="${CARGO_HOME:-${HOME}/.cargo}"
+  candidate="${cargo_home}/bin/${BINARY_NAME}"
+  if [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  return 1
+}
+
 download_latest_tag() {
   if [ -n "${CLOAKPIPE_VERSION:-}" ]; then
     printf '%s\n' "$CLOAKPIPE_VERSION"
@@ -66,6 +94,7 @@ install_binary() {
       target_dir="/usr/local/bin"
       sudo install -m 755 "$binary_path" "${target_dir}/${BINARY_NAME}"
       log "Installed ${BINARY_NAME} to ${target_dir}/${BINARY_NAME}"
+      preinstall_bundled_presets "${target_dir}/${BINARY_NAME}"
       return 0
     else
       target_dir="${HOME}/.local/bin"
@@ -75,6 +104,7 @@ install_binary() {
   mkdir -p "$target_dir"
   install -m 755 "$binary_path" "${target_dir}/${BINARY_NAME}"
   log "Installed ${BINARY_NAME} to ${target_dir}/${BINARY_NAME}"
+  preinstall_bundled_presets "${target_dir}/${BINARY_NAME}"
 }
 
 install_from_release() {
@@ -118,6 +148,8 @@ install_from_release() {
 }
 
 install_with_cargo() {
+  binary_path=""
+
   if ! command -v cargo >/dev/null 2>&1; then
     log "cargo is required for fallback install, but it was not found."
     return 1
@@ -125,11 +157,15 @@ install_with_cargo() {
 
   if cargo install --locked cloakpipe >/dev/null 2>&1; then
     log "Installed ${BINARY_NAME} with cargo install cloakpipe"
+    binary_path="$(resolve_installed_binary || true)"
+    [ -n "$binary_path" ] && preinstall_bundled_presets "$binary_path"
     return 0
   fi
 
   cargo install --locked cloakpipe-cli
   log "Installed ${BINARY_NAME} with cargo install cloakpipe-cli"
+  binary_path="$(resolve_installed_binary || true)"
+  [ -n "$binary_path" ] && preinstall_bundled_presets "$binary_path"
 }
 
 main() {

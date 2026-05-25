@@ -6,11 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_BINARY: cloakpipe
 
 jobs:
   test:
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,3 +28,145 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
+
+  prepare_release:
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      sha: ${{ steps.bump.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - id: bump
+        name: Bump workspace version
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          root = Path("Cargo.toml")
+          cargo = tomllib.loads(root.read_text())
+          current = cargo["workspace"]["package"]["version"]
+          major, minor, _patch = map(int, current.split("."))
+          updated = f"{major}.{minor + 1}.0"
+
+          root_text = root.read_text()
+          root.write_text(
+              re.sub(
+                  rf'(^version = "){re.escape(current)}(")$',
+                  rf"\g<1>{updated}\2",
+                  root_text,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+          )
+
+          for manifest in Path("crates").glob("*/Cargo.toml"):
+              manifest_text = manifest.read_text()
+              manifest.write_text(
+                  re.sub(
+                      rf'(path = "\.\./[^"]+", version = "){re.escape(current)}(")',
+                      rf"\g<1>{updated}\2",
+                      manifest_text,
+                  )
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as github_output:
+              github_output.write(f"version={updated}\n")
+              github_output.write(f"tag=v{updated}\n")
+          PY
+
+          version="$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          print(tomllib.loads(Path("Cargo.toml").read_text())["workspace"]["package"]["version"])
+          PY
+          )"
+          tag="v${version}"
+
+          git add Cargo.toml crates/*/Cargo.toml
+          git commit -m "chore(release): bump version to ${tag}"
+          git push origin HEAD:main
+
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build_release:
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+    needs: prepare_release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: aarch64
+          - runner: macos-13
+            os: darwin
+            arch: x86_64
+          - runner: macos-14
+            os: darwin
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare_release.outputs.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p cloakpipe-cli --bin ${{ env.RELEASE_BINARY }}
+
+      - name: Package release artifact
+        run: |
+          archive_name="${{ env.RELEASE_BINARY }}-${{ needs.prepare_release.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "dist/${archive_name}"
+          cp "target/release/${{ env.RELEASE_BINARY }}" "dist/${archive_name}/${{ env.RELEASE_BINARY }}"
+          cp -R policies "dist/${archive_name}/policies"
+          tar -C dist -czf "dist/${archive_name}.tar.gz" "${archive_name}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_BINARY }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  publish_release:
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+    needs:
+      - prepare_release
+      - build_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4.1.3
+        with:
+          path: dist
+          pattern: ${{ env.RELEASE_BINARY }}-*
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.tag }}
+          target_commitish: ${{ needs.prepare_release.outputs.sha }}
+          generate_release_notes: true
+          files: dist/*.tar.gz
