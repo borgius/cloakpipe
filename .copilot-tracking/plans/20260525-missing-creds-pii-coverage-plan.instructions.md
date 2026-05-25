@@ -1,5 +1,5 @@
 ---
-applyTo: ".copilot-tracking/changes/20260525-missing-creds-pii-coverage-changes.md"
+applyTo: '.copilot-tracking/changes/20260525-missing-creds-pii-coverage-changes.md'
 ---
 
 <!-- markdownlint-disable-file -->
@@ -48,37 +48,30 @@ Fix CloakPipe masking so detected custom credentials use similar-format replacem
 ### [ ] Phase 1: Establish Coverage Baseline
 
 - [ ] Task 1.1: Document missed PII and placeholder categories in tests
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 11-26)
 
 ### [ ] Phase 2: Replace Placeholder Custom Fakes With Similar Values
 
 - [ ] Task 2.1: Extend custom similar-value generators
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 30-47)
 
 - [ ] Task 2.2: Add generator unit tests
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 49-63)
 
 ### [ ] Phase 3: Detect Missed Structured PII And Credentials
 
 - [ ] Task 3.1: Add deterministic pattern rules for structured misses
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 67-82)
 
 - [ ] Task 3.2: Improve phone detection behavior for split spans
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 84-100)
 
 ### [ ] Phase 4: Detect Long-Document NER Tail Entities
 
 - [ ] Task 4.1: Chunk DistilBERT NER with source-offset preservation
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 104-120)
 
 - [ ] Task 4.2: Add NER-tail regression tests
-
   - Details: .copilot-tracking/details/20260525-missing-creds-pii-coverage-details.md (Lines 122-136)
 
 ## Dependencies

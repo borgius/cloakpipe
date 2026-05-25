@@ -28,7 +28,6 @@ You WILL use #file:../research/20260525-missing-creds-pii-coverage-research.md a
 When ALL Phases are checked off (`[x]`) and completed you WILL do the following:
 
 1. You WILL provide a markdown style link and a summary of all changes from #file:../changes/20260525-missing-creds-pii-coverage-changes.md to the user:
-
    - You WILL keep the overall summary brief
    - You WILL add spacing around any lists
    - You MUST wrap any reference to a file in a markdown style link
