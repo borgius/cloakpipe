@@ -158,11 +158,11 @@ install_with_cargo() {
   fi
 
   if [ -n "$tag" ]; then
-    cargo install --git "$git_repo_url" --tag "$tag" --bin "${BINARY_NAME}" cloakpipe-cli
-    log "Installed ${BINARY_NAME} with cargo install --git ${REPO} --tag ${tag} cloakpipe-cli"
+    cargo install --locked --git "$git_repo_url" --tag "$tag" --bin "${BINARY_NAME}" cloakpipe-cli
+    log "Installed ${BINARY_NAME} with cargo install --locked --git ${REPO} --tag ${tag} cloakpipe-cli"
   else
-    cargo install --git "$git_repo_url" --bin "${BINARY_NAME}" cloakpipe-cli
-    log "Installed ${BINARY_NAME} with cargo install --git ${REPO} cloakpipe-cli"
+    cargo install --locked --git "$git_repo_url" --bin "${BINARY_NAME}" cloakpipe-cli
+    log "Installed ${BINARY_NAME} with cargo install --locked --git ${REPO} cloakpipe-cli"
   fi
 
   binary_path="$(resolve_installed_binary || true)"
