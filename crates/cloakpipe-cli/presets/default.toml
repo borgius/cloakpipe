@@ -38,7 +38,9 @@ enabled = false
 backend = "distilbert_pii"
 # model = "./models/ner-english-base.onnx"
 confidence_threshold = 0.85
-entity_types = ["PERSON", "ORG", "LOC"]
+# Empty list enables every DistilBERT-PII label when NER is enabled. To narrow
+# NER, list labels or aliases such as ["PERSON", "EMAIL", "SSN", "BANK_ACCOUNT"].
+entity_types = []
 
 [detection.custom]
 patterns = [

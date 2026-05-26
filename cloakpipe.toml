@@ -29,6 +29,8 @@ urls_internal = true
 enabled = true
 backend = "distilbert_pii"
 confidence_threshold = 0.4
+# Empty list enables every DistilBERT-PII label. To narrow NER, list labels or
+# aliases such as ["PERSON", "EMAIL", "SSN", "BANK_ACCOUNT"].
 entity_types = []
 sidecar_url = ""
 

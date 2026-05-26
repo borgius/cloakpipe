@@ -31,6 +31,7 @@ urls_internal = true
 enabled = false
 backend = "distilbert_pii"
 confidence_threshold = 0.70
+entity_types = []
 # model = "models/distilbert-pii/quantized/model_quantized.onnx"
 
 [detection.custom]

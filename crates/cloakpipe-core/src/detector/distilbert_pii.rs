@@ -14,6 +14,7 @@ use crate::{DetectedEntity, DetectionSource, EntityCategory};
 use anyhow::Result;
 use ort::session::Session;
 use ort::value::Value;
+use std::collections::HashSet;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 use tracing::{debug, info};
@@ -87,6 +88,163 @@ const LABELS: &[&str] = &[
     "I-CREDITCARDCVV",
 ];
 
+/// DistilBERT entity type names without IOB2 prefixes.
+const ENTITY_TYPES: &[&str] = &[
+    "FIRSTNAME",
+    "CITY",
+    "AGE",
+    "EMAIL",
+    "USERNAME",
+    "DATE",
+    "URL",
+    "PIN",
+    "DOB",
+    "LASTNAME",
+    "COMPANYNAME",
+    "ACCOUNTNAME",
+    "MIDDLENAME",
+    "IBAN",
+    "CREDITCARDNUMBER",
+    "CREDITCARDISSUER",
+    "SSN",
+    "GENDER",
+    "COUNTY",
+    "STATE",
+    "SEX",
+    "AMOUNT",
+    "PREFIX",
+    "ACCOUNTNUMBER",
+    "PHONENUMBER",
+    "ZIPCODE",
+    "PHONEIMEI",
+    "PASSWORD",
+    "BUILDINGNUMBER",
+    "STREET",
+    "SECONDARYADDRESS",
+    "CREDITCARDCVV",
+];
+
+#[derive(Debug, Clone)]
+struct EntityTypeFilter {
+    enabled: Option<HashSet<&'static str>>,
+}
+
+impl EntityTypeFilter {
+    fn from_configured_types(entity_types: &[String]) -> Self {
+        if entity_types.is_empty() {
+            return Self { enabled: None };
+        }
+
+        let mut enabled = HashSet::new();
+        for entity_type in entity_types {
+            let normalized = normalize_entity_type(entity_type);
+            if normalized.is_empty() {
+                continue;
+            }
+            if matches!(normalized.as_str(), "*" | "ALL") {
+                return Self { enabled: None };
+            }
+            for &label in expand_entity_type_alias(&normalized) {
+                enabled.insert(label);
+            }
+        }
+
+        Self {
+            enabled: Some(enabled),
+        }
+    }
+
+    fn allows(&self, label: &str) -> bool {
+        let Some(enabled) = &self.enabled else {
+            return true;
+        };
+        enabled.contains(entity_type_from_label(label))
+    }
+
+    fn configured_count(&self) -> usize {
+        self.enabled
+            .as_ref()
+            .map_or(ENTITY_TYPES.len(), HashSet::len)
+    }
+}
+
+fn entity_type_from_label(label: &str) -> &str {
+    label
+        .strip_prefix("B-")
+        .or_else(|| label.strip_prefix("I-"))
+        .unwrap_or(label)
+}
+
+fn normalize_entity_type(entity_type: &str) -> String {
+    let entity_type = entity_type
+        .trim()
+        .strip_prefix("B-")
+        .or_else(|| entity_type.trim().strip_prefix("I-"))
+        .unwrap_or_else(|| entity_type.trim());
+
+    if entity_type == "*" {
+        return "*".into();
+    }
+
+    entity_type
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+fn expand_entity_type_alias(entity_type: &str) -> &'static [&'static str] {
+    match entity_type {
+        "PERSON" | "NAME" | "FULLNAME" | "DIRECTIDENTITY" => {
+            &["FIRSTNAME", "MIDDLENAME", "LASTNAME", "PREFIX"]
+        }
+        "FIRSTNAME" | "GIVENNAME" => &["FIRSTNAME"],
+        "MIDDLENAME" => &["MIDDLENAME"],
+        "LASTNAME" | "SURNAME" | "FAMILYNAME" => &["LASTNAME"],
+        "PREFIX" | "TITLE" | "HONORIFIC" => &["PREFIX"],
+        "ORG" | "ORGANIZATION" | "ORGANISATION" | "COMPANY" | "COMPANYNAME" => &["COMPANYNAME"],
+        "LOCATION" | "LOC" | "ADDRESS" => &[
+            "CITY",
+            "STATE",
+            "COUNTY",
+            "ZIPCODE",
+            "BUILDINGNUMBER",
+            "STREET",
+            "SECONDARYADDRESS",
+        ],
+        "STREETADDRESS" | "STREETADDRESSLINE" => &["BUILDINGNUMBER", "STREET", "SECONDARYADDRESS"],
+        "CITY" => &["CITY"],
+        "STATE" | "REGION" => &["STATE"],
+        "COUNTY" => &["COUNTY"],
+        "ZIP" | "ZIPCODE" | "POSTCODE" | "POSTALCODE" => &["ZIPCODE"],
+        "BUILDINGNUMBER" | "HOUSENUMBER" => &["BUILDINGNUMBER"],
+        "STREET" => &["STREET"],
+        "SECONDARYADDRESS" | "APT" | "APARTMENT" | "UNIT" => &["SECONDARYADDRESS"],
+        "DATE" => &["DATE", "DOB"],
+        "DOB" | "DATEOFBIRTH" | "BIRTHDATE" | "BIRTHYEAR" => &["DOB"],
+        "EMAIL" | "EMAILADDRESS" => &["EMAIL"],
+        "PHONE" | "PHONENUM" | "PHONENUMBER" | "PHONENUMBERS" => &["PHONENUMBER"],
+        "URL" | "URLPERSONAL" | "PERSONALURL" | "WEBSITE" | "PROFILEURL" => &["URL"],
+        "SSN" | "SOCIALSECURITYNUMBER" | "NATIONALINSURANCENUMBER" => &["SSN"],
+        "AGE" => &["AGE"],
+        "GENDER" | "GENDERIDENTITY" => &["GENDER", "SEX"],
+        "SEX" => &["SEX"],
+        "USERNAME" | "USERID" | "LOGIN" | "HANDLE" => &["USERNAME"],
+        "AMOUNT" | "MONEY" | "MONEYAMOUNT" | "CURRENCY" => &["AMOUNT"],
+        "ACCOUNT" | "ACCOUNTNUMBER" | "ACCOUNTNUM" => &["ACCOUNTNUMBER"],
+        "BANKACCOUNT" | "BANKACCOUNTNUMBER" => &["ACCOUNTNUMBER", "IBAN"],
+        "ACCOUNTNAME" | "ACCOUNTHOLDER" => &["ACCOUNTNAME"],
+        "IBAN" => &["IBAN"],
+        "CREDITCARD" | "CREDITCARDNUMBER" | "PAYMENTCARD" | "CARDNUMBER" => &["CREDITCARDNUMBER"],
+        "CREDITCARDISSUER" | "CARDISSUER" | "CARDISSUERNAME" => &["CREDITCARDISSUER"],
+        "CREDITCARDCVV" | "CARDVERIFICATIONCODE" | "CVV" | "CVC" => &["CREDITCARDCVV"],
+        "PIN" => &["PIN"],
+        "PASSWORD" | "PASSCODE" | "SECRET" => &["PASSWORD"],
+        "DEVICEID" | "IMEI" | "PHONEIMEI" => &["PHONEIMEI"],
+        _ => &[],
+    }
+}
+
 /// Map IOB2 label to CloakPipe EntityCategory.
 fn label_to_category(label: &str) -> EntityCategory {
     // Strip B-/I- prefix
@@ -115,7 +273,8 @@ fn label_to_category(label: &str) -> EntityCategory {
         "AMOUNT" => EntityCategory::Amount,
         "USERNAME" => EntityCategory::Custom("USERNAME".into()),
         "PHONEIMEI" => EntityCategory::Custom("DEVICE_ID".into()),
-        "AGE" | "GENDER" | "SEX" => EntityCategory::Custom(entity_type.to_string()),
+        "AGE" => EntityCategory::Custom("AGE".into()),
+        "GENDER" | "SEX" => EntityCategory::Custom("GENDER".into()),
         _ => EntityCategory::Custom(entity_type.to_string()),
     }
 }
@@ -124,6 +283,7 @@ pub struct DistilBertPiiDetector {
     session: Mutex<Session>,
     tokenizer: Tokenizer,
     confidence_threshold: f64,
+    entity_filter: EntityTypeFilter,
 }
 
 impl DistilBertPiiDetector {
@@ -187,9 +347,12 @@ impl DistilBertPiiDetector {
             anyhow::anyhow!("Failed to load tokenizer from {:?}: {}", tokenizer_path, e)
         })?;
 
+        let entity_filter = EntityTypeFilter::from_configured_types(&config.entity_types);
+
         info!(
-            "DistilBERT-PII loaded: {} labels, threshold={:.2}",
+            "DistilBERT-PII loaded: {} labels, {} entity types enabled, threshold={:.2}",
             LABELS.len(),
+            entity_filter.configured_count(),
             config.confidence_threshold
         );
 
@@ -197,6 +360,7 @@ impl DistilBertPiiDetector {
             session: Mutex::new(session),
             tokenizer,
             confidence_threshold: config.confidence_threshold,
+            entity_filter,
         })
     }
 
@@ -309,6 +473,22 @@ impl DistilBertPiiDetector {
                 continue;
             }
 
+            if label == "O" || !self.entity_filter.allows(label) {
+                if let Some((text_val, start, end, conf, cat)) = current.take() {
+                    push_entity(
+                        &mut entities,
+                        text,
+                        &text_val,
+                        start,
+                        end,
+                        base_offset,
+                        conf,
+                        cat,
+                    );
+                }
+                continue;
+            }
+
             let (off_start, off_end) = offsets[i];
 
             if label.starts_with("B-") {
@@ -385,20 +565,6 @@ impl DistilBertPiiDetector {
                             category,
                         ));
                     }
-                }
-            } else {
-                // O label
-                if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(
-                        &mut entities,
-                        text,
-                        &text_val,
-                        start,
-                        end,
-                        base_offset,
-                        conf,
-                        cat,
-                    );
                 }
             }
         }
@@ -580,6 +746,10 @@ mod tests {
         );
         assert_eq!(label_to_category("B-AMOUNT"), EntityCategory::Amount);
         assert_eq!(label_to_category("B-PASSWORD"), EntityCategory::Secret);
+        assert_eq!(
+            label_to_category("B-SEX"),
+            EntityCategory::Custom("GENDER".into())
+        );
     }
 
     #[test]
@@ -587,5 +757,35 @@ mod tests {
         assert_eq!(LABELS.len(), 65);
         assert_eq!(LABELS[0], "O");
         assert_eq!(LABELS[1], "B-FIRSTNAME");
+    }
+
+    #[test]
+    fn entity_type_filter_defaults_to_all_labels() {
+        let filter = EntityTypeFilter::from_configured_types(&[]);
+
+        assert!(filter.allows("B-FIRSTNAME"));
+        assert!(filter.allows("I-CREDITCARDCVV"));
+        assert!(filter.allows("B-SECONDARYADDRESS"));
+    }
+
+    #[test]
+    fn entity_type_filter_accepts_category_aliases() {
+        let configured = vec![
+            "PERSON".to_string(),
+            "bank_account".to_string(),
+            "date_of_birth".to_string(),
+            "card_verification_code".to_string(),
+            "phone_num".to_string(),
+        ];
+        let filter = EntityTypeFilter::from_configured_types(&configured);
+
+        assert!(filter.allows("B-FIRSTNAME"));
+        assert!(filter.allows("I-LASTNAME"));
+        assert!(filter.allows("B-ACCOUNTNUMBER"));
+        assert!(filter.allows("B-IBAN"));
+        assert!(filter.allows("B-DOB"));
+        assert!(filter.allows("B-CREDITCARDCVV"));
+        assert!(filter.allows("B-PHONENUMBER"));
+        assert!(!filter.allows("B-EMAIL"));
     }
 }
