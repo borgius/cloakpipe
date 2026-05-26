@@ -15,6 +15,10 @@ cloakpipe --config dpdp.toml policy edit
 
 When you pass a bundled preset name such as `dpdp.toml`, CloakPipe edits the installed user copy under `CLOAKPIPE_CONFIG_HOME/policies` instead of changing the bundled source file. The editor covers detection toggles, replacement strategy, NER settings, custom regex patterns, preserve values, and force values.
 
+Preset installation now uses the global CloakPipe home: `~/.cloakpipe/policies` by default, or `CLOAKPIPE_HOME/policies` when `CLOAKPIPE_HOME` is set. `CLOAKPIPE_CONFIG_HOME` remains supported for existing setups.
+
+If `--config` is omitted, CloakPipe searches from the current directory upward for `cloakpipe.toml`, then `cloackpipe.toml`, before falling back to `~/.cloakpipe/cloakpipe.toml`.
+
 ## Presets
 
 - `default.toml` — baseline config already shipped with the repo

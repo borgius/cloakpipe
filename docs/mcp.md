@@ -30,6 +30,8 @@ Run the stdio server with the CLI:
 cloakpipe --config /absolute/path/to/cloakpipe.toml mcp
 ```
 
+You can also omit `--config`. CloakPipe searches from the current directory upward for `cloakpipe.toml`, then `cloackpipe.toml`, and then uses `~/.cloakpipe/cloakpipe.toml`.
+
 For local development from the workspace root, you can also run:
 
 ```bash
@@ -60,7 +62,7 @@ A typical MCP client entry looks like this:
 
 ### Configuration file
 
-The CLI loads the file passed via `--config`. If the file is missing, it falls back to the built-in default config.
+The CLI loads the file passed via `--config`. Missing explicit paths are errors. When `--config` is omitted, CloakPipe uses project-to-global discovery and bootstraps `~/.cloakpipe/cloakpipe.toml` if no project config exists.
 
 ### Vault key
 
@@ -83,6 +85,10 @@ That means:
 - **new mappings created through the MCP server are currently lost when the process exits**
 
 If you depend on cross-restart persistence, treat that as a current limitation of the MCP path.
+
+### Audit and session context
+
+MCP tool calls emit audit metadata with `surface = "mcp"`. The MCP server also creates and uses the `global` session for direct tool calls, so `session_context` can inspect context accumulated through MCP pseudonymization.
 
 ## Response format and error handling
 

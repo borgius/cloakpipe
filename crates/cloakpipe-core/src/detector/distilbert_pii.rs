@@ -10,6 +10,7 @@
 //! Tokenizer:  models/distilbert-pii/tokenizer.json
 
 use crate::config::NerConfig;
+use crate::paths;
 use crate::{DetectedEntity, DetectionSource, EntityCategory};
 use anyhow::Result;
 use ort::session::Session;
@@ -288,10 +289,19 @@ pub struct DistilBertPiiDetector {
 
 impl DistilBertPiiDetector {
     pub fn new(config: &NerConfig) -> Result<Self> {
-        let model_path = config
-            .model
-            .as_deref()
-            .unwrap_or("models/distilbert-pii/quantized/model_quantized.onnx");
+        let default_model_path;
+        let model_path = match config.model.as_deref() {
+            Some(model) => model,
+            None => {
+                default_model_path = paths::global_distilbert_pii_model_path()?;
+                default_model_path.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Global DistilBERT model path is not valid UTF-8: {}",
+                        default_model_path.display()
+                    )
+                })?
+            }
+        };
 
         info!("Loading DistilBERT-PII model from: {}", model_path);
 

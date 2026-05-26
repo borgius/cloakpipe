@@ -8,7 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn test_ner_install_dry_run() {
+    let config_home = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .env("CLOAKPIPE_HOME", config_home.path())
         .args([
             "ner",
             "install",
@@ -35,7 +37,13 @@ fn test_ner_install_dry_run() {
         stdout.contains("gliner"),
         "expected gliner package in: {stdout}"
     );
-    assert!(stdout.contains(".cloakpipe/gliner-pii-venv"));
+    assert!(stdout.contains(
+        &config_home
+            .path()
+            .join("gliner-pii-venv")
+            .display()
+            .to_string()
+    ));
     assert!(stdout.contains("Start the sidecar: cloakpipe ner start"));
     assert!(stdout.contains("backend = \"gliner_pii\""));
 }
@@ -44,6 +52,7 @@ fn test_ner_install_dry_run() {
 #[test]
 fn test_ner_install_falls_back_to_local_virtualenv_when_python_is_externally_managed() {
     let dir = tempfile::tempdir().unwrap();
+    let config_home = tempfile::tempdir().unwrap();
     let fake_python = dir.path().join("fake-python");
 
     fs::write(
@@ -91,6 +100,7 @@ exit 1
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
         .current_dir(dir.path())
+        .env("CLOAKPIPE_HOME", config_home.path())
         .args([
             "ner",
             "install",
@@ -109,11 +119,14 @@ exit 1
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(stdout.contains("Detected an externally managed Python environment."));
-    assert!(stdout.contains("Falling back to a local virtualenv at .cloakpipe/gliner-pii-venv"));
+    assert!(stdout.contains(&format!(
+        "Falling back to a local virtualenv at {}",
+        config_home.path().join("gliner-pii-venv").display()
+    )));
     assert!(stdout.contains("Installed gliner successfully."));
     assert!(stdout.contains("Start the sidecar: cloakpipe ner start"));
-    assert!(dir
+    assert!(config_home
         .path()
-        .join(".cloakpipe/gliner-pii-venv/bin/python")
+        .join("gliner-pii-venv/bin/python")
         .exists());
 }

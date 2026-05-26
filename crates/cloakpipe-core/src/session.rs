@@ -11,6 +11,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Canonical session used by direct API and MCP surfaces when callers do not
+/// provide per-request session IDs.
+pub const GLOBAL_SESSION_ID: &str = "global";
+
 /// Configuration for session-aware pseudonymization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
@@ -686,6 +690,11 @@ impl SessionManager {
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
+}
+
+/// Ensure the canonical global session exists and return its ID.
+pub fn ensure_global_session(sessions: &SessionManager) -> String {
+    sessions.get_or_create(GLOBAL_SESSION_ID)
 }
 
 /// Find a word at a word boundary in text. Returns byte offset if found.

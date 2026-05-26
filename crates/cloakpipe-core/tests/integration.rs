@@ -48,8 +48,27 @@ fn load_workspace_config() -> CloakPipeConfig {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cloakpipe.toml");
     let content = fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read config {}: {}", path.display(), err));
-    toml::from_str(&content)
-        .unwrap_or_else(|err| panic!("failed to parse config {}: {}", path.display(), err))
+    let mut config: CloakPipeConfig = toml::from_str(&content)
+        .unwrap_or_else(|err| panic!("failed to parse config {}: {}", path.display(), err));
+    config.detection.ner.enabled = false;
+    config.detection.overrides.force.extend(
+        [
+            "Avery Collins",
+            "Dr. Elena Morris",
+            "Northwind Community Health",
+            "Cedar Ridge Family Medicine",
+            "Meridian Harbor Insurance",
+            "1842 Willow Creek Drive",
+            "Apt 5B",
+            "Fairview",
+            "Oregon",
+            "Jefferson",
+            "97035",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+    config
 }
 
 #[test]

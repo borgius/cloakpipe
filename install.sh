@@ -11,12 +11,15 @@ log() {
 preinstall_bundled_presets() {
   binary_path="$1"
 
-  if "$binary_path" presets install >/dev/null 2>&1; then
-    log "Installed bundled presets for ${BINARY_NAME}"
+  output="$("$binary_path" presets install 2>&1)" || {
+    log "Warning: could not preinstall bundled presets. Run '${binary_path} presets install' manually."
     return 0
-  fi
+  }
 
-  log "Warning: could not preinstall bundled presets. Run '${binary_path} presets install' manually."
+  if [ -n "$output" ]; then
+    printf '%s\n' "$output"
+  fi
+  log "Initialized global ${BINARY_NAME} home and bundled presets"
   return 0
 }
 

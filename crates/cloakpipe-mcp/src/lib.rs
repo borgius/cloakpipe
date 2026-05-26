@@ -3,14 +3,16 @@
 //! Tools: pseudonymize, rehydrate, detect, vault_stats, configure.
 //! Transport: stdio (for Claude Code, Cursor, etc.)
 
+use cloakpipe_audit::{AuditContext, AuditEvent, AuditSink};
 use cloakpipe_core::{
     config::{CloakPipeConfig, DetectionConfig},
     detector::Detector,
     profiles::IndustryProfile,
     rehydrator::Rehydrator,
     replacer::Replacer,
-    session::SessionManager,
+    session::{ensure_global_session, SessionManager, GLOBAL_SESSION_ID},
     vault::Vault,
+    PseudoToken,
 };
 use rmcp::{
     handler::server::wrapper::Parameters,
@@ -29,6 +31,7 @@ pub struct CloakPipeServer {
     config: Arc<RwLock<DetectionConfig>>,
     active_profile: Arc<RwLock<Option<String>>>,
     sessions: Arc<SessionManager>,
+    audit: AuditSink,
 }
 
 // -- Tool parameter types --
@@ -119,17 +122,37 @@ impl CloakPipeServer {
         description = "Pseudonymize text: detect and replace sensitive entities with consistent tokens. Same entity always maps to same token. Use this before sending data to external APIs."
     )]
     async fn pseudonymize(&self, Parameters(params): Parameters<PseudonymizeParams>) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
         let detector = self.detector.read().await;
         let entities = match detector.detect(&params.text) {
             Ok(e) => e,
-            Err(e) => return format!("Error: Detection failed: {}", e),
+            Err(e) => {
+                let _ = self.audit.log_error(
+                    AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+                    &format!("Detection failed: {e}"),
+                );
+                return format!("Error: Detection failed: {}", e);
+            }
         };
 
         let mut vault = self.vault.lock().await;
         let result = match Replacer::pseudonymize(&params.text, &entities, &mut vault) {
             Ok(r) => r,
-            Err(e) => return format!("Error: Pseudonymize failed: {}", e),
+            Err(e) => {
+                let _ = self.audit.log_error(
+                    AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+                    &format!("Pseudonymize failed: {e}"),
+                );
+                return format!("Error: Pseudonymize failed: {}", e);
+            }
         };
+        let tokens: Vec<PseudoToken> = entities
+            .iter()
+            .map(|entity| vault.get_or_create(&entity.original, &entity.category))
+            .collect();
+        self.sessions.with_session(GLOBAL_SESSION_ID, |ctx| {
+            ctx.record_entities(&entities, &tokens);
+        });
 
         let categories: Vec<String> = entities
             .iter()
@@ -137,6 +160,12 @@ impl CloakPipeServer {
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
+        let _ = self.audit.log_pseudonymize(
+            AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            entities.len(),
+            entities.len(),
+            categories.clone(),
+        );
 
         let response = PseudonymizeResult {
             text: result.text,
@@ -152,11 +181,22 @@ impl CloakPipeServer {
         description = "Rehydrate text: replace pseudo-tokens (EMAIL_1, AMOUNT_2, etc.) back with original values. Use this to restore real data in LLM responses."
     )]
     async fn rehydrate(&self, Parameters(params): Parameters<RehydrateParams>) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
         let vault = self.vault.lock().await;
         let result = match Rehydrator::rehydrate(&params.text, &vault) {
             Ok(r) => r,
-            Err(e) => return format!("Error: Rehydrate failed: {}", e),
+            Err(e) => {
+                let _ = self.audit.log_error(
+                    AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+                    &format!("Rehydrate failed: {e}"),
+                );
+                return format!("Error: Rehydrate failed: {}", e);
+            }
         };
+        let _ = self.audit.log_rehydrate(
+            AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            result.rehydrated_count,
+        );
 
         let response = RehydrateResult {
             text: result.text,
@@ -171,11 +211,30 @@ impl CloakPipeServer {
         description = "Detect sensitive entities in text without replacing them (dry run). Returns category, confidence, source for each match."
     )]
     async fn detect(&self, Parameters(params): Parameters<DetectParams>) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
         let detector = self.detector.read().await;
         let entities = match detector.detect(&params.text) {
             Ok(e) => e,
-            Err(e) => return format!("Error: Detection failed: {}", e),
+            Err(e) => {
+                let _ = self.audit.log_error(
+                    AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+                    &format!("Detection failed: {e}"),
+                );
+                return format!("Error: Detection failed: {}", e);
+            }
         };
+        let categories: Vec<String> = entities
+            .iter()
+            .map(|e| format!("{:?}", e.category))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let _ = self.audit.log_metadata(
+            AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            AuditEvent::Detect,
+            Some(entities.len()),
+            categories,
+        );
 
         let response = DetectResult {
             entities: entities
@@ -195,8 +254,15 @@ impl CloakPipeServer {
     /// Show vault statistics: total mappings and per-category counts.
     #[tool(description = "Show vault statistics: total mappings and per-category counts.")]
     async fn vault_stats(&self) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
         let vault = self.vault.lock().await;
         let stats = vault.stats();
+        let _ = self.audit.log_metadata(
+            AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            AuditEvent::VaultStats,
+            None,
+            Vec::new(),
+        );
 
         let response = VaultStatsResult {
             total_mappings: stats.total_mappings,
@@ -211,6 +277,7 @@ impl CloakPipeServer {
         description = "Configure detection at runtime: switch industry profile (general/legal/healthcare/fintech) or enable/disable categories (secrets, financial, dates, emails, phone_numbers, ip_addresses, urls_internal)."
     )]
     async fn configure(&self, Parameters(params): Parameters<ConfigureParams>) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
         let mut config = self.config.write().await;
 
         // Apply profile if specified
@@ -244,6 +311,12 @@ impl CloakPipeServer {
         *detector = new_detector;
 
         let ap = self.active_profile.read().await;
+        let _ = self.audit.log_metadata(
+            AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            AuditEvent::Configure,
+            None,
+            Vec::new(),
+        );
         let response = ConfigureResult {
             active_profile: ap.clone(),
             secrets: config.secrets,
@@ -265,6 +338,13 @@ impl CloakPipeServer {
         &self,
         Parameters(params): Parameters<SessionContextParams>,
     ) -> String {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let _ = self.audit.log_metadata(
+            AuditContext::new("mcp", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            AuditEvent::SessionContext,
+            None,
+            Vec::new(),
+        );
         if params.session_id == "list" {
             let sessions = self.sessions.list_sessions();
             if sessions.is_empty() {
@@ -318,16 +398,23 @@ impl ServerHandler for CloakPipeServer {
 }
 
 impl CloakPipeServer {
-    pub fn new(config: CloakPipeConfig, detector: Detector, vault: Vault) -> Self {
+    pub fn new(
+        config: CloakPipeConfig,
+        detector: Detector,
+        vault: Vault,
+        audit: AuditSink,
+    ) -> Self {
         let detection_config = config.detection.clone();
         let profile = config.profile.clone();
         let sessions = Arc::new(SessionManager::new(config.session.clone()));
+        ensure_global_session(&sessions);
         Self {
             detector: Arc::new(RwLock::new(detector)),
             vault: Arc::new(Mutex::new(vault)),
             config: Arc::new(RwLock::new(detection_config)),
             active_profile: Arc::new(RwLock::new(profile)),
             sessions,
+            audit,
         }
     }
 }
@@ -337,8 +424,9 @@ pub async fn serve_stdio(
     config: CloakPipeConfig,
     detector: Detector,
     vault: Vault,
+    audit: AuditSink,
 ) -> anyhow::Result<()> {
-    let server = CloakPipeServer::new(config, detector, vault);
+    let server = CloakPipeServer::new(config, detector, vault, audit);
 
     tracing::info!("Starting CloakPipe MCP server (stdio)");
 
@@ -383,6 +471,7 @@ mod tests {
             config: Arc::new(RwLock::new(config)),
             active_profile: Arc::new(RwLock::new(None)),
             sessions: Arc::new(SessionManager::new(Default::default())),
+            audit: AuditSink::disabled(),
         }
     }
 

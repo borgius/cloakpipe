@@ -22,9 +22,11 @@ Two quick notes before you copy old examples from elsewhere:
 
 ### Base URL
 
-The server listens on whatever `proxy.listen` is set to in `cloakpipe.toml`.
+The server listens on whatever `proxy.listen` is set to in the selected config.
 
-If you let `cloakpipe start` create a fresh config for you, the generated default is:
+If you omit `--config`, the CLI searches from the current directory upward for `cloakpipe.toml`, then `cloackpipe.toml`, and then uses the global config at `~/.cloakpipe/cloakpipe.toml`. The installer and `cloakpipe presets install` create that global config without overwriting existing files.
+
+The generated default listens on:
 
 - `127.0.0.1:8900`
 
@@ -65,6 +67,11 @@ That means:
 - Entity-to-token mappings live in the configured vault.
 - If `CLOAKPIPE_VAULT_KEY` is missing, CloakPipe generates an ephemeral key at startup.
 - With an ephemeral key, mappings do not survive a restart.
+- Relative vault, audit, tree storage, and local model paths are resolved relative to the selected config file, not the process directory.
+
+### Audit behavior
+
+Audit can write JSONL or SQLite records, depending on `[audit].backend`. Audit records include safe metadata only: event type, surface (`api`, `proxy`, or `mcp`), request ID, optional user/session IDs, counts, categories when enabled, and errors. Direct API endpoints, proxied chat/embeddings, and MCP tools all emit through the same audit sink.
 
 ### Content types and headers
 
@@ -802,7 +809,7 @@ If the tree does not exist, the handler returns `404` with a plain text message 
 
 ## Session endpoints
 
-Sessions are disabled by default. To make these endpoints useful, enable them in `cloakpipe.toml`:
+Sessions are disabled by default for caller-provided proxy sessions. Direct API and MCP startup still create a safe `global` session so tools can inspect global direct-call context. To enable header-derived proxy sessions, set this in the selected config:
 
 ```toml
 [session]
@@ -814,7 +821,7 @@ sensitivity_escalation = true
 session_threshold = 0.8
 ```
 
-Sessions are created from chat requests, not from direct calls to `/sessions`.
+Sessions are created from chat requests that include the configured session header, plus the built-in `global` session used by direct API and MCP flows.
 
 The session APIs expose only safe statistics. They do **not** return raw PII.
 

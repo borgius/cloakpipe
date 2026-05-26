@@ -10,9 +10,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(about = "Privacy middleware for LLM & RAG pipelines")]
 #[command(version)]
 struct Cli {
-    /// Path to configuration file or bundled preset name (e.g. dpdp.toml)
-    #[arg(short, long, default_value = "cloakpipe.toml")]
-    config: String,
+    /// Path to configuration file or bundled preset name (e.g. dpdp.toml).
+    /// Omit to discover the nearest project config, then global ~/.cloakpipe/cloakpipe.toml.
+    #[arg(short, long)]
+    config: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -258,6 +259,8 @@ pub enum VectorCommands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let config = cli.config.clone();
+    let config = config.as_deref();
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -267,17 +270,17 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match cli.command {
-        Commands::Start => commands::start(&cli.config).await,
-        Commands::Test { text, file } => commands::test(&cli.config, text, file).await,
-        Commands::Stats => commands::stats(&cli.config).await,
+        Commands::Start => commands::start(config).await,
+        Commands::Test { text, file } => commands::test(config, text, file).await,
+        Commands::Stats => commands::stats(config).await,
         Commands::Init => commands::init().await,
         Commands::Setup => commands::setup().await,
         Commands::Presets { action } => commands::presets(action).await,
-        Commands::Policy { action } => commands::policy(&cli.config, action).await,
-        Commands::Mcp => commands::mcp(&cli.config).await,
-        Commands::Tree { action } => commands::tree(&cli.config, action).await,
+        Commands::Policy { action } => commands::policy(config, action).await,
+        Commands::Mcp => commands::mcp(config).await,
+        Commands::Tree { action } => commands::tree(config, action).await,
         Commands::Vector { action } => commands::vector(action).await,
-        Commands::Sessions { action } => commands::sessions(&cli.config, action).await,
+        Commands::Sessions { action } => commands::sessions(config, action).await,
         Commands::Ner { action } => commands::ner(action).await,
         Commands::Scan {
             input,
@@ -285,17 +288,7 @@ async fn main() -> anyhow::Result<()> {
             strategy,
             detect_only,
             min_confidence,
-        } => {
-            commands::scan(
-                &cli.config,
-                input,
-                output,
-                strategy,
-                detect_only,
-                min_confidence,
-            )
-            .await
-        }
+        } => commands::scan(config, input, output, strategy, detect_only, min_confidence).await,
         Commands::Restore {
             input,
             output,

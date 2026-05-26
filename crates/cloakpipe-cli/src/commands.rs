@@ -5,10 +5,11 @@ use crate::presets::{
     ResolvedPreset,
 };
 use anyhow::{bail, Context, Result};
-use cloakpipe_audit::AuditLogger;
+use cloakpipe_audit::AuditSink;
 use cloakpipe_core::{
     config::{CloakPipeConfig, CustomPattern, DetectionConfig, NerBackend},
     detector::Detector,
+    paths,
     rehydrator::Rehydrator,
     replacer::Replacer,
     vault::Vault,
@@ -33,7 +34,6 @@ const TORCH_COMPATIBLE_PYTHONS: &[&str] = &[
     "python3.13",
 ];
 const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
-const GLINER_VENV_DIR: &str = ".cloakpipe/gliner-pii-venv";
 const GLINER_SERVER_SCRIPT: &str = "tools/gliner-pii-server.py";
 
 const DISTILBERT_DOWNLOAD_SCRIPT: &str = "tools/download_model.sh";
@@ -42,6 +42,22 @@ enum ConfigSource {
     Existing(PathBuf),
     BundledPreset(ResolvedPreset),
     Missing(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigSourceKind {
+    ExplicitPath,
+    BundledPreset,
+    Project,
+    Global,
+}
+
+struct ResolvedConfig {
+    config: CloakPipeConfig,
+    path: PathBuf,
+    base_dir: PathBuf,
+    source: ConfigSourceKind,
+    preset_name: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,18 +248,173 @@ fn resolve_config_path(config_path: &str) -> Result<ConfigSource> {
     Ok(ConfigSource::Missing(path))
 }
 
-fn load_config(config_path: &str) -> Result<CloakPipeConfig> {
-    match resolve_config_path(config_path)? {
-        ConfigSource::Existing(path) | ConfigSource::Missing(path) => load_config_file(&path),
-        ConfigSource::BundledPreset(preset) => load_config_file(&preset.path),
+fn load_resolved_config(config_path: Option<&str>) -> Result<ResolvedConfig> {
+    match config_path.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(config_path) => load_explicit_config(config_path),
+        None => load_discovered_config(),
     }
 }
 
-fn load_config_or_default(config_path: &str) -> Result<CloakPipeConfig> {
+fn load_explicit_config(config_path: &str) -> Result<ResolvedConfig> {
     match resolve_config_path(config_path)? {
-        ConfigSource::Existing(path) => load_config_file(&path),
-        ConfigSource::BundledPreset(preset) => load_config_file(&preset.path),
-        ConfigSource::Missing(_) => Ok(default_config()),
+        ConfigSource::Existing(path) => {
+            load_config_from_path(path, ConfigSourceKind::ExplicitPath, None)
+        }
+        ConfigSource::BundledPreset(preset) => load_config_from_path(
+            preset.path,
+            ConfigSourceKind::BundledPreset,
+            Some(preset.name),
+        ),
+        ConfigSource::Missing(path) => {
+            bail!(
+                "Config file not found: {}. Omit --config to use project/global discovery, or pass a valid path/preset.",
+                path.display()
+            )
+        }
+    }
+}
+
+fn load_discovered_config() -> Result<ResolvedConfig> {
+    if let Some(path) = find_project_config()? {
+        return load_config_from_path(path, ConfigSourceKind::Project, None);
+    }
+
+    let global_config = ensure_global_layout()?;
+    load_config_from_path(global_config, ConfigSourceKind::Global, None)
+}
+
+fn load_config_from_path(
+    path: PathBuf,
+    source: ConfigSourceKind,
+    preset_name: Option<&'static str>,
+) -> Result<ResolvedConfig> {
+    let path = absolute_path(&path)?;
+    let base_dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut config = load_config_file(&path)?;
+    normalize_config_paths(&mut config, &base_dir)?;
+
+    Ok(ResolvedConfig {
+        config,
+        path,
+        base_dir,
+        source,
+        preset_name,
+    })
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()
+            .context("Cannot determine current directory")?
+            .join(path))
+    }
+}
+
+fn find_project_config() -> Result<Option<PathBuf>> {
+    let current_dir = std::env::current_dir().context("Cannot determine current directory")?;
+    for dir in current_dir.ancestors() {
+        for file_name in paths::project_config_file_names() {
+            let candidate = dir.join(file_name);
+            if candidate.is_file() {
+                return Ok(Some(candidate));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn ensure_global_layout() -> Result<PathBuf> {
+    let home = paths::global_home()?;
+    let models = paths::global_models_dir()?;
+    let policies = paths::global_policies_dir()?;
+
+    std::fs::create_dir_all(&models).with_context(|| {
+        format!(
+            "Cannot create global models directory: {}",
+            models.display()
+        )
+    })?;
+    std::fs::create_dir_all(&policies).with_context(|| {
+        format!(
+            "Cannot create global policies directory: {}",
+            policies.display()
+        )
+    })?;
+
+    for candidate in paths::global_config_candidates()? {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    std::fs::create_dir_all(&home)
+        .with_context(|| format!("Cannot create global CloakPipe home: {}", home.display()))?;
+    let config_path = paths::global_config_path()?;
+    let toml_str = toml::to_string_pretty(&default_config())?;
+    std::fs::write(&config_path, toml_str)
+        .with_context(|| format!("Cannot write global config: {}", config_path.display()))?;
+    Ok(config_path)
+}
+
+fn normalize_config_paths(config: &mut CloakPipeConfig, base_dir: &Path) -> Result<()> {
+    config.vault.path = paths::resolve_config_relative_string(base_dir, &config.vault.path);
+    config.audit.log_path = paths::resolve_config_relative_string(base_dir, &config.audit.log_path);
+    config.tree.storage_path =
+        paths::resolve_config_relative_string(base_dir, &config.tree.storage_path);
+
+    if let Some(vector_db_path) = config.local.vector_db_path.as_mut() {
+        *vector_db_path = paths::resolve_config_relative_string(base_dir, vector_db_path);
+    }
+
+    if let Some(model) = config.detection.ner.model.as_mut() {
+        *model = paths::resolve_config_relative_string(base_dir, model);
+    } else {
+        config.detection.ner.model =
+            Some(default_global_ner_model_path(config.detection.ner.backend)?);
+    }
+
+    Ok(())
+}
+
+fn default_global_ner_model_path(backend: NerBackend) -> Result<String> {
+    let path = match backend {
+        NerBackend::Bert => paths::global_bert_ner_model_path()?,
+        NerBackend::Gliner => paths::global_gliner_model_path()?,
+        NerBackend::DistilBertPii => paths::global_distilbert_pii_model_path()?,
+        NerBackend::GlinerPii => paths::global_gliner_model_path()?,
+    };
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn log_resolved_config(resolved: &ResolvedConfig) {
+    match (resolved.source, resolved.preset_name) {
+        (ConfigSourceKind::BundledPreset, Some(name)) => tracing::info!(
+            preset = name,
+            path = %resolved.path.display(),
+            base_dir = %resolved.base_dir.display(),
+            "Using bundled preset"
+        ),
+        (ConfigSourceKind::Project, _) => tracing::info!(
+            path = %resolved.path.display(),
+            base_dir = %resolved.base_dir.display(),
+            "Using discovered project config"
+        ),
+        (ConfigSourceKind::Global, _) => tracing::info!(
+            path = %resolved.path.display(),
+            base_dir = %resolved.base_dir.display(),
+            "Using global config"
+        ),
+        _ => tracing::info!(
+            path = %resolved.path.display(),
+            base_dir = %resolved.base_dir.display(),
+            "Using explicit config"
+        ),
     }
 }
 
@@ -324,29 +495,14 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
 }
 
 /// Start the proxy server.
-pub async fn start(config_path: &str) -> Result<()> {
-    let config = match resolve_config_path(config_path)? {
-        ConfigSource::Existing(path) => load_config_file(&path)?,
-        ConfigSource::BundledPreset(preset) => {
-            tracing::info!(
-                preset = preset.name,
-                path = %preset.path.display(),
-                "Using bundled preset"
-            );
-            load_config_file(&preset.path)?
-        }
-        ConfigSource::Missing(path) => {
-            tracing::info!("No config found, creating {} with defaults", path.display());
-            let config = default_config();
-            let toml_str = toml::to_string_pretty(&config)?;
-            std::fs::write(&path, toml_str)?;
-            config
-        }
-    };
+pub async fn start(config_path: Option<&str>) -> Result<()> {
+    let resolved = load_resolved_config(config_path)?;
+    log_resolved_config(&resolved);
+    let config = resolved.config;
     let key = resolve_vault_key(&config)?;
     let detector = Detector::from_config(&config.detection)?;
     let vault = Vault::open(&config.vault.path, key)?;
-    let audit = AuditLogger::new(&config.audit.log_path, config.audit.log_entities)?;
+    let audit = AuditSink::from_config(&config.audit)?;
     let api_key = resolve_proxy_api_key(&config);
 
     tracing::info!(
@@ -360,7 +516,11 @@ pub async fn start(config_path: &str) -> Result<()> {
 }
 
 /// Test detection on sample text.
-pub async fn test(config_path: &str, text: Option<String>, file: Option<String>) -> Result<()> {
+pub async fn test(
+    config_path: Option<&str>,
+    text: Option<String>,
+    file: Option<String>,
+) -> Result<()> {
     let input = match (text, file) {
         (Some(t), _) => t,
         (_, Some(f)) => {
@@ -374,7 +534,7 @@ pub async fn test(config_path: &str, text: Option<String>, file: Option<String>)
         }
     };
 
-    let config = load_config_or_default(config_path)?;
+    let config = load_resolved_config(config_path)?.config;
 
     let detector = Detector::from_config(&config.detection)?;
     let mut vault = Vault::ephemeral();
@@ -413,8 +573,8 @@ pub async fn test(config_path: &str, text: Option<String>, file: Option<String>)
 }
 
 /// Show vault statistics.
-pub async fn stats(config_path: &str) -> Result<()> {
-    let config = load_config(config_path)?;
+pub async fn stats(config_path: Option<&str>) -> Result<()> {
+    let config = load_resolved_config(config_path)?.config;
     let key = resolve_vault_key(&config)?;
     let vault = Vault::open(&config.vault.path, key)?;
     let stats = vault.stats();
@@ -433,6 +593,7 @@ pub async fn stats(config_path: &str) -> Result<()> {
 
 /// Initialize a new config file.
 pub async fn init() -> Result<()> {
+    let global_config = ensure_global_layout()?;
     let path = "cloakpipe.toml";
     if std::path::Path::new(path).exists() {
         bail!("{} already exists", path);
@@ -443,6 +604,7 @@ pub async fn init() -> Result<()> {
     std::fs::write(path, toml_str)?;
     let preset_dir = install_bundled_presets()?;
     println!("Created {}", path);
+    println!("Global config available at {}", global_config.display());
     println!("Bundled presets installed in {}", preset_dir.display());
     println!("\nNext steps:");
     println!("  1. Set OPENAI_API_KEY (or your upstream API key)");
@@ -457,7 +619,9 @@ pub async fn init() -> Result<()> {
 pub async fn presets(action: crate::PresetCommands) -> Result<()> {
     match action {
         crate::PresetCommands::Install => {
+            let global_config = ensure_global_layout()?;
             let preset_dir = install_bundled_presets()?;
+            println!("Global config available at {}", global_config.display());
             println!("Bundled presets installed in {}", preset_dir.display());
             for preset in bundled_presets() {
                 println!("  {} — {}", preset.file_name, preset.description);
@@ -491,18 +655,28 @@ pub async fn presets(action: crate::PresetCommands) -> Result<()> {
 }
 
 /// Policy editing commands.
-pub async fn policy(config_path: &str, action: crate::PolicyCommands) -> Result<()> {
+pub async fn policy(config_path: Option<&str>, action: crate::PolicyCommands) -> Result<()> {
     match action {
         crate::PolicyCommands::Edit => edit_policy(config_path).await,
     }
 }
 
-async fn edit_policy(config_path: &str) -> Result<()> {
+async fn edit_policy(config_path: Option<&str>) -> Result<()> {
     let target = resolve_editable_policy(config_path)?;
     run_policy_editor(target)
 }
 
-fn resolve_editable_policy(config_path: &str) -> Result<EditablePolicy> {
+fn resolve_editable_policy(config_path: Option<&str>) -> Result<EditablePolicy> {
+    let Some(config_path) = config_path.map(str::trim).filter(|value| !value.is_empty()) else {
+        let resolved = load_discovered_config()?;
+        return Ok(EditablePolicy {
+            config: load_config_file(&resolved.path)?,
+            path: resolved.path,
+            source: EditablePolicySource::ExistingFile,
+            preset_name: resolved.preset_name,
+        });
+    };
+
     match resolve_config_path(config_path)? {
         ConfigSource::Existing(path) => Ok(EditablePolicy {
             config: load_config_file(&path)?,
@@ -1079,6 +1253,8 @@ pub async fn setup() -> Result<()> {
     use cloakpipe_core::profiles::IndustryProfile;
     use dialoguer::{Confirm, Select};
 
+    let global_config = ensure_global_layout()?;
+
     println!("CloakPipe Setup\n");
 
     // 1. Industry profile
@@ -1165,6 +1341,7 @@ pub async fn setup() -> Result<()> {
     let preset_dir = install_bundled_presets()?;
 
     println!("\nCreated {} with profile: {}", path, profile);
+    println!("Global config available at {}", global_config.display());
     println!("Bundled presets installed in {}", preset_dir.display());
     println!("\nNext steps:");
     println!("  1. Set {} (your API key)", api_key_env);
@@ -1208,9 +1385,11 @@ pub async fn ner(action: crate::NerCommands) -> Result<()> {
 /// Delegates to tools/download_model.sh which tries GitHub LFS first,
 /// then falls back to HuggingFace download + ONNX conversion.
 async fn download_distilbert_pii(force: bool) -> Result<()> {
+    ensure_global_layout()?;
     let current_dir = std::env::current_dir().context("Cannot determine current directory")?;
     let project_root = find_gliner_project_root(&current_dir)?;
     let script = project_root.join(DISTILBERT_DOWNLOAD_SCRIPT);
+    let target_dir = paths::global_distilbert_pii_dir()?;
     if !script.exists() {
         bail!(
             "Download script not found: {}\nRun from the CloakPipe project root.",
@@ -1220,6 +1399,7 @@ async fn download_distilbert_pii(force: bool) -> Result<()> {
 
     let mut cmd = std::process::Command::new("bash");
     cmd.arg(&script);
+    cmd.arg("--target-dir").arg(&target_dir);
     if force {
         cmd.arg("--force");
     }
@@ -1238,13 +1418,14 @@ async fn download_distilbert_pii(force: bool) -> Result<()> {
 }
 
 fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) -> Result<()> {
+    ensure_global_layout()?;
     let user_specified_python = python.is_some();
     let python = PathBuf::from(match python {
         Some(python) => python,
         None if dry_run => "python3".to_string(),
         None => detect_python_interpreter()?,
     });
-    let venv_dir = default_gliner_venv_dir();
+    let venv_dir = default_gliner_venv_dir()?;
 
     let install_args = [
         "-m",
@@ -1373,7 +1554,7 @@ fn start_gliner_pii(
     let current_dir = std::env::current_dir().context("Cannot determine current directory")?;
     let project_root = find_gliner_project_root(&current_dir)?;
     let script_path = project_root.join(GLINER_SERVER_SCRIPT);
-    let python = resolve_gliner_start_python(python, &project_root, dry_run)?;
+    let python = resolve_gliner_start_python(python, dry_run)?;
 
     let args = vec![
         path_arg(&script_path),
@@ -1454,12 +1635,8 @@ fn command_available(command: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn default_gliner_venv_dir() -> PathBuf {
-    PathBuf::from(GLINER_VENV_DIR)
-}
-
-fn gliner_venv_dir(project_root: &Path) -> PathBuf {
-    project_root.join(GLINER_VENV_DIR)
+fn default_gliner_venv_dir() -> Result<PathBuf> {
+    paths::global_gliner_runtime_dir()
 }
 
 fn find_gliner_project_root(start_dir: &Path) -> Result<PathBuf> {
@@ -1476,16 +1653,12 @@ fn find_gliner_project_root(start_dir: &Path) -> Result<PathBuf> {
     )
 }
 
-fn resolve_gliner_start_python(
-    python: Option<String>,
-    project_root: &Path,
-    dry_run: bool,
-) -> Result<PathBuf> {
+fn resolve_gliner_start_python(python: Option<String>, dry_run: bool) -> Result<PathBuf> {
     if let Some(python) = python {
         return Ok(PathBuf::from(python));
     }
 
-    let managed_python = virtualenv_python_path(&gliner_venv_dir(project_root));
+    let managed_python = virtualenv_python_path(&default_gliner_venv_dir()?);
     if managed_python.exists() {
         return Ok(managed_python);
     }
@@ -1674,18 +1847,13 @@ mod tests {
     }
 
     #[test]
-    fn default_gliner_venv_dir_is_project_local() {
-        assert_eq!(
-            default_gliner_venv_dir(),
-            PathBuf::from(".cloakpipe/gliner-pii-venv")
-        );
-    }
+    fn default_gliner_venv_dir_is_global() {
+        let config_home = tempfile::tempdir().unwrap();
+        let _env = EnvVarGuard::set_path("CLOAKPIPE_HOME", config_home.path());
 
-    #[test]
-    fn gliner_venv_dir_is_relative_to_project_root() {
         assert_eq!(
-            gliner_venv_dir(Path::new("/tmp/cloakpipe")),
-            PathBuf::from("/tmp/cloakpipe/.cloakpipe/gliner-pii-venv")
+            default_gliner_venv_dir().unwrap(),
+            config_home.path().join("gliner-pii-venv")
         );
     }
 
@@ -1805,7 +1973,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("missing.toml");
 
-        let target = resolve_editable_policy(path.to_str().unwrap()).unwrap();
+        let target = resolve_editable_policy(path.to_str()).unwrap();
 
         assert_eq!(target.source, EditablePolicySource::MissingFile);
         assert_eq!(target.path, path);
@@ -1817,12 +1985,83 @@ mod tests {
         let config_home = tempfile::tempdir().unwrap();
         let _env = EnvVarGuard::set_path("CLOAKPIPE_CONFIG_HOME", config_home.path());
 
-        let target = resolve_editable_policy("dpdp.toml").unwrap();
+        let target = resolve_editable_policy(Some("dpdp.toml")).unwrap();
 
         assert_eq!(target.source, EditablePolicySource::BundledPreset);
         assert_eq!(target.preset_name, Some("dpdp"));
         assert_eq!(target.path, config_home.path().join("policies/dpdp.toml"));
         assert!(target.path.exists());
+    }
+
+    #[test]
+    fn ensure_global_layout_creates_home_config_models_and_policies() {
+        let config_home = tempfile::tempdir().unwrap();
+        let _env = EnvVarGuard::set_path("CLOAKPIPE_HOME", config_home.path());
+
+        let config_path = ensure_global_layout().unwrap();
+
+        assert_eq!(config_path, config_home.path().join("cloakpipe.toml"));
+        assert!(config_path.exists());
+        assert!(config_home.path().join("models").is_dir());
+        assert!(config_home.path().join("policies").is_dir());
+    }
+
+    #[test]
+    fn omitted_config_discovers_nearest_project_alias_before_global() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let global_home = tempfile::tempdir().unwrap();
+        let _env = EnvVarGuard::set_path("CLOAKPIPE_HOME", global_home.path());
+
+        let project = temp_dir.path().join("project");
+        let nested = project.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let mut root_config = default_config();
+        root_config.vault.path = "root-vault.enc".into();
+        std::fs::write(
+            project.join("cloakpipe.toml"),
+            toml::to_string_pretty(&root_config).unwrap(),
+        )
+        .unwrap();
+
+        let mut nested_config = default_config();
+        nested_config.vault.path = "nested-vault.enc".into();
+        nested_config.audit.log_path = "audit".into();
+        std::fs::write(
+            nested.join("cloackpipe.toml"),
+            toml::to_string_pretty(&nested_config).unwrap(),
+        )
+        .unwrap();
+
+        let _cwd = CwdGuard::chdir(&nested);
+        let resolved = load_resolved_config(None).unwrap();
+
+        assert_eq!(resolved.source, ConfigSourceKind::Project);
+        let nested = nested.canonicalize().unwrap();
+        assert_eq!(resolved.path, nested.join("cloackpipe.toml"));
+        assert_eq!(
+            resolved.config.vault.path,
+            path_arg(&nested.join("nested-vault.enc"))
+        );
+        assert_eq!(
+            resolved.config.audit.log_path,
+            path_arg(&nested.join("audit"))
+        );
+    }
+
+    #[test]
+    fn omitted_config_bootstraps_global_when_no_project_config_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let global_home = tempfile::tempdir().unwrap();
+        let _env = EnvVarGuard::set_path("CLOAKPIPE_HOME", global_home.path());
+        let _cwd = CwdGuard::chdir(temp_dir.path());
+
+        let resolved = load_resolved_config(None).unwrap();
+
+        assert_eq!(resolved.source, ConfigSourceKind::Global);
+        assert_eq!(resolved.path, global_home.path().join("cloakpipe.toml"));
+        assert!(global_home.path().join("models").is_dir());
+        assert!(global_home.path().join("policies").is_dir());
     }
 
     fn failure_status() -> std::process::ExitStatus {
@@ -1867,22 +2106,41 @@ mod tests {
             }
         }
     }
+
+    struct CwdGuard {
+        previous: PathBuf,
+    }
+
+    impl CwdGuard {
+        fn chdir(path: &Path) -> Self {
+            let previous = std::env::current_dir().unwrap();
+            std::env::set_current_dir(path).unwrap();
+            Self { previous }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).unwrap();
+        }
+    }
 }
 
 /// Start as MCP server (stdio transport).
-pub async fn mcp(config_path: &str) -> Result<()> {
-    let config = load_config_or_default(config_path)?;
+pub async fn mcp(config_path: Option<&str>) -> Result<()> {
+    let config = load_resolved_config(config_path)?.config;
 
     let key = resolve_vault_key(&config)?;
     let vault = cloakpipe_core::vault::Vault::open(&config.vault.path, key)?;
     let detector = cloakpipe_core::detector::Detector::from_config(&config.detection)?;
+    let audit = AuditSink::from_config(&config.audit)?;
 
-    cloakpipe_mcp::serve_stdio(config, detector, vault).await
+    cloakpipe_mcp::serve_stdio(config, detector, vault, audit).await
 }
 
 /// CloakTree commands — vectorless document retrieval.
-pub async fn tree(config_path: &str, action: crate::TreeCommands) -> Result<()> {
-    let config = load_config_or_default(config_path)?;
+pub async fn tree(config_path: Option<&str>, action: crate::TreeCommands) -> Result<()> {
+    let config = load_resolved_config(config_path)?.config;
 
     let tree_config = &config.tree;
 
@@ -2244,14 +2502,14 @@ fn default_config() -> CloakPipeConfig {
 
 /// RAG pipeline scan — detect and optionally mask PII across files/directories.
 pub async fn scan(
-    config_path: &str,
+    config_path: Option<&str>,
     input: String,
     output: Option<String>,
     strategy: String,
     detect_only: bool,
     min_confidence: f64,
 ) -> Result<()> {
-    let config = load_config_or_default(config_path)?;
+    let config = load_resolved_config(config_path)?.config;
 
     let detector = Detector::from_config(&config.detection)?;
     let masking_strategy = match strategy.as_str() {
@@ -2485,8 +2743,8 @@ fn collect_files_recursive(
 }
 
 /// Session management commands — talks to the running proxy's HTTP API.
-pub async fn sessions(config_path: &str, action: crate::SessionCommands) -> Result<()> {
-    let config = load_config_or_default(config_path)?;
+pub async fn sessions(config_path: Option<&str>, action: crate::SessionCommands) -> Result<()> {
+    let config = load_resolved_config(config_path)?.config;
 
     let base = format!("http://{}", config.proxy.listen);
     let client = reqwest::Client::new();

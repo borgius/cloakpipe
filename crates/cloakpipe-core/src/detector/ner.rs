@@ -9,6 +9,7 @@
 //! Label scheme (IOB2): O, B-PER, I-PER, B-ORG, I-ORG, B-LOC, I-LOC, B-MISC, I-MISC
 
 use crate::config::NerConfig;
+use crate::paths;
 use crate::{DetectedEntity, DetectionSource, EntityCategory};
 use anyhow::Result;
 use ort::session::Session;
@@ -37,7 +38,19 @@ impl NerDetector {
     /// - `config.model` = path to ONNX model file (e.g., "models/bert-ner.onnx")
     /// - A `tokenizer.json` file in the same directory as the model
     pub fn new(config: &NerConfig) -> Result<Self> {
-        let model_path = config.model.as_deref().unwrap_or("models/bert-ner.onnx");
+        let default_model_path;
+        let model_path = match config.model.as_deref() {
+            Some(model) => model,
+            None => {
+                default_model_path = paths::global_bert_ner_model_path()?;
+                default_model_path.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Global BERT NER model path is not valid UTF-8: {}",
+                        default_model_path.display()
+                    )
+                })?
+            }
+        };
 
         info!("Loading NER model from: {}", model_path);
 

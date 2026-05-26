@@ -1,10 +1,10 @@
 //! Shared application state for the proxy server.
 
-use cloakpipe_audit::AuditLogger;
+use cloakpipe_audit::AuditSink;
 use cloakpipe_core::{
     config::{CloakPipeConfig, DetectionConfig},
     detector::Detector,
-    session::SessionManager,
+    session::{ensure_global_session, SessionManager},
     vault::Vault,
 };
 use std::sync::Arc;
@@ -17,7 +17,7 @@ pub struct AppState {
     pub detection_config: Arc<RwLock<DetectionConfig>>,
     pub active_profile: Arc<RwLock<Option<String>>>,
     pub vault: Arc<Mutex<Vault>>,
-    pub audit: AuditLogger,
+    pub audit: AuditSink,
     pub http_client: reqwest::Client,
     pub api_key: Option<String>,
     pub sessions: Arc<SessionManager>,
@@ -28,7 +28,7 @@ impl AppState {
         config: CloakPipeConfig,
         detector: Detector,
         vault: Vault,
-        audit: AuditLogger,
+        audit: AuditSink,
         api_key: Option<String>,
     ) -> Self {
         let detection_config = config.detection.clone();
@@ -39,6 +39,7 @@ impl AppState {
             .expect("Failed to build HTTP client");
 
         let sessions = Arc::new(SessionManager::new(config.session.clone()));
+        ensure_global_session(&sessions);
 
         Self {
             config,

@@ -9,6 +9,7 @@
 pub mod config;
 pub mod detector;
 pub mod format_preserving;
+pub mod paths;
 pub mod profiles;
 pub mod rehydrator;
 pub mod replacer;

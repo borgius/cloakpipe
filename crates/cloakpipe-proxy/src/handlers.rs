@@ -9,9 +9,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use cloakpipe_audit::{AuditContext, AuditEvent};
 use cloakpipe_core::{
     config::DetectionConfig, detector::Detector, profiles::IndustryProfile, rehydrator::Rehydrator,
-    replacer::Replacer, PseudoToken,
+    replacer::Replacer, session::GLOBAL_SESSION_ID, PseudoToken,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -122,10 +123,17 @@ pub async fn api_pseudonymize(
                 format!("Error: Pseudonymize failed: {}", e),
             )
         })?;
+        let tokens: Vec<PseudoToken> = entities
+            .iter()
+            .map(|entity| vault.get_or_create(&entity.original, &entity.category))
+            .collect();
+        state.sessions.with_session(GLOBAL_SESSION_ID, |ctx| {
+            ctx.record_entities(&entities, &tokens);
+        });
 
         let categories = entity_categories(&entities);
         let _ = state.audit.log_pseudonymize(
-            &request_id,
+            AuditContext::new("api", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
             entities.len(),
             entities.len(),
             categories.clone(),
@@ -157,9 +165,10 @@ pub async fn api_rehydrate(
             )
         })?;
 
-        let _ = state
-            .audit
-            .log_rehydrate(&request_id, result.rehydrated_count);
+        let _ = state.audit.log_rehydrate(
+            AuditContext::new("api", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+            result.rehydrated_count,
+        );
 
         RehydrateResponse {
             text: result.text,
@@ -175,13 +184,21 @@ pub async fn api_detect(
     State(state): State<Arc<AppState>>,
     Json(params): Json<DetectRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let request_id = Uuid::new_v4().to_string();
     let entities = detect_entities(&state, &params.text).await.map_err(|e| {
-        tracing::error!("Detection failed: {}", e);
+        tracing::error!(request_id = %request_id, "Detection failed: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Error: Detection failed: {}", e),
         )
     })?;
+    let categories = entity_categories(&entities);
+    let _ = state.audit.log_metadata(
+        AuditContext::new("api", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+        AuditEvent::Detect,
+        Some(entities.len()),
+        categories,
+    );
 
     Ok(Json(DetectResponse {
         entities: entities
@@ -198,6 +215,7 @@ pub async fn api_detect(
 
 /// Direct privacy endpoint: safe aggregate vault stats.
 pub async fn api_vault_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let request_id = Uuid::new_v4().to_string();
     let response = {
         let vault = state.vault.lock().await;
         let stats = vault.stats();
@@ -206,6 +224,12 @@ pub async fn api_vault_stats(State(state): State<Arc<AppState>>) -> impl IntoRes
             categories: stats.categories,
         }
     };
+    let _ = state.audit.log_metadata(
+        AuditContext::new("api", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+        AuditEvent::VaultStats,
+        None,
+        Vec::new(),
+    );
 
     Json(response)
 }
@@ -215,6 +239,7 @@ pub async fn api_configure(
     State(state): State<Arc<AppState>>,
     Json(params): Json<ConfigureRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let request_id = Uuid::new_v4().to_string();
     let mut next_config = state.detection_config.read().await.clone();
     let mut next_active_profile = state.active_profile.read().await.clone();
 
@@ -260,6 +285,12 @@ pub async fn api_configure(
         let mut active_profile = state.active_profile.write().await;
         *active_profile = next_active_profile.clone();
     }
+    let _ = state.audit.log_metadata(
+        AuditContext::new("api", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+        AuditEvent::Configure,
+        None,
+        Vec::new(),
+    );
 
     Ok(Json(ConfigureResponse {
         active_profile: next_active_profile,
@@ -277,6 +308,7 @@ pub async fn api_session_context(
     State(state): State<Arc<AppState>>,
     Json(params): Json<SessionContextRequest>,
 ) -> impl IntoResponse {
+    let request_id = Uuid::new_v4().to_string();
     let body = if params.session_id == "list" {
         let sessions = state.sessions.list_sessions();
         if sessions.is_empty() {
@@ -297,6 +329,12 @@ pub async fn api_session_context(
             "error": format!("Session '{}' not found", params.session_id)
         })
     };
+    let _ = state.audit.log_metadata(
+        AuditContext::new("api", &request_id).with_session(Some(GLOBAL_SESSION_ID)),
+        AuditEvent::SessionContext,
+        None,
+        Vec::new(),
+    );
 
     Json(body)
 }
@@ -481,9 +519,11 @@ pub async fn proxy_chat_completions(
                 {
                     if let Ok(rehydrated) = Rehydrator::rehydrate(&content, &vault) {
                         choice["message"]["content"] = Value::String(rehydrated.text);
-                        let _ = state
-                            .audit
-                            .log_rehydrate(&request_id, rehydrated.rehydrated_count);
+                        let _ = state.audit.log_rehydrate(
+                            AuditContext::new("proxy", &request_id)
+                                .with_session(session_id.as_deref()),
+                            rehydrated.rehydrated_count,
+                        );
                     }
                 }
             }
@@ -508,15 +548,26 @@ pub async fn proxy_embeddings(
     let request_id = Uuid::new_v4().to_string();
     let api_key = require_upstream_api_key(&state)?;
 
-    let entities_count = pseudonymize_embedding_input(&state, &mut body, &request_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(request_id = %request_id, "Pseudonymization failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Pseudonymization failed: {}", e),
-            )
-        })?;
+    let session_id = if state.sessions.is_enabled() {
+        let sid = extract_session_id(&headers, &state.config.session.id_from);
+        if let Some(ref id) = sid {
+            state.sessions.get_or_create(id);
+        }
+        sid
+    } else {
+        None
+    };
+
+    let entities_count =
+        pseudonymize_embedding_input(&state, &mut body, &request_id, session_id.as_deref())
+            .await
+            .map_err(|e| {
+                tracing::error!(request_id = %request_id, "Pseudonymization failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Pseudonymization failed: {}", e),
+                )
+            })?;
 
     tracing::info!(
         request_id = %request_id,
@@ -681,7 +732,7 @@ async fn pseudonymize_messages(
                     let categories = entity_categories(&entities);
 
                     let _ = state.audit.log_pseudonymize(
-                        request_id,
+                        AuditContext::new("proxy", request_id).with_session(session_id),
                         entities.len(),
                         entities.len(),
                         categories,
@@ -701,6 +752,7 @@ async fn pseudonymize_embedding_input(
     state: &AppState,
     body: &mut Value,
     request_id: &str,
+    session_id: Option<&str>,
 ) -> anyhow::Result<usize> {
     let mut total_entities = 0;
 
@@ -718,7 +770,7 @@ async fn pseudonymize_embedding_input(
 
                     let categories = entity_categories(&entities);
                     let _ = state.audit.log_pseudonymize(
-                        request_id,
+                        AuditContext::new("proxy", request_id).with_session(session_id),
                         entities.len(),
                         entities.len(),
                         categories,
@@ -739,7 +791,7 @@ async fn pseudonymize_embedding_input(
 
                             let categories = entity_categories(&entities);
                             let _ = state.audit.log_pseudonymize(
-                                request_id,
+                                AuditContext::new("proxy", request_id).with_session(session_id),
                                 entities.len(),
                                 entities.len(),
                                 categories,

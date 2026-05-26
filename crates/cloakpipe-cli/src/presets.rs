@@ -1,11 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
+use cloakpipe_core::paths;
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
-
-const CLOAKPIPE_CONFIG_HOME_ENV: &str = "CLOAKPIPE_CONFIG_HOME";
-const PRESET_INSTALL_SUBDIR: &str = "policies";
 
 pub struct BundledPreset {
     pub name: &'static str,
@@ -63,7 +61,7 @@ pub fn bundled_presets() -> &'static [BundledPreset] {
 }
 
 pub fn installed_preset_dir() -> Result<PathBuf> {
-    Ok(cloakpipe_config_home()?.join(PRESET_INSTALL_SUBDIR))
+    paths::global_policies_dir()
 }
 
 pub fn install_bundled_presets() -> Result<PathBuf> {
@@ -114,46 +112,6 @@ fn find_bundled_preset(input: &str) -> Option<&'static BundledPreset> {
     BUNDLED_PRESETS.iter().find(|preset| {
         preset.name.eq_ignore_ascii_case(stem) || preset.file_name.eq_ignore_ascii_case(input)
     })
-}
-
-fn cloakpipe_config_home() -> Result<PathBuf> {
-    if let Some(dir) = env::var_os(CLOAKPIPE_CONFIG_HOME_ENV) {
-        return Ok(PathBuf::from(dir));
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(appdata) = env::var_os("APPDATA") {
-            return Ok(PathBuf::from(appdata).join("cloakpipe"));
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = home_dir_os() {
-            return Ok(PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("cloakpipe"));
-        }
-    }
-
-    if let Some(xdg_config_home) = env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(xdg_config_home).join("cloakpipe"));
-    }
-
-    if let Some(home) = home_dir_os() {
-        return Ok(PathBuf::from(home).join(".config").join("cloakpipe"));
-    }
-
-    bail!(
-        "Cannot determine a CloakPipe config directory. Set {} to a writable directory.",
-        CLOAKPIPE_CONFIG_HOME_ENV
-    )
-}
-
-fn home_dir_os() -> Option<std::ffi::OsString> {
-    env::var_os("HOME")
 }
 
 #[cfg(test)]

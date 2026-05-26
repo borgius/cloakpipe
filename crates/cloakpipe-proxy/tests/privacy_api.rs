@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
 };
-use cloakpipe_audit::AuditLogger;
+use cloakpipe_audit::AuditSink;
 use cloakpipe_core::{
     config::{
         AuditConfig, CloakPipeConfig, DetectionConfig, LocalConfig, ProxyConfig, TreeConfig,
@@ -76,7 +76,7 @@ fn test_state_with_api_key(api_key: Option<&str>) -> std::sync::Arc<AppState> {
     let config = test_config(&audit_dir);
     let detector = Detector::from_config(&config.detection).unwrap();
     let vault = Vault::ephemeral();
-    let audit = AuditLogger::new(&audit_dir, true).unwrap();
+    let audit = AuditSink::from_config(&config.audit).unwrap();
 
     std::sync::Arc::new(AppState::new(
         config,
@@ -288,11 +288,14 @@ async fn test_session_context_endpoint_matches_mcp_shape() {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(listed["total"], 1);
-    assert_eq!(
-        listed["sessions"].as_array().unwrap()[0]["session_id"],
-        "session-123"
-    );
+    assert_eq!(listed["total"], 2);
+    let sessions = listed["sessions"].as_array().unwrap();
+    assert!(sessions
+        .iter()
+        .any(|session| session["session_id"] == "global"));
+    assert!(sessions
+        .iter()
+        .any(|session| session["session_id"] == "session-123"));
 
     let app = build_router(state.clone());
     let (status, inspected) = json_response(

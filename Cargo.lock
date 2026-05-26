@@ -481,6 +481,7 @@ name = "cloakpipe-mcp"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "cloakpipe-audit",
  "cloakpipe-core",
  "rmcp",
  "serde",
@@ -488,6 +489,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

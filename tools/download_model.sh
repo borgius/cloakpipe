@@ -6,22 +6,44 @@
 #   2. Try GitHub Releases for the ONNX model (~63 MB, fast).
 #   3. Fall back to HuggingFace safetensors download + Python ONNX conversion.
 #
-# Usage: download_model.sh [--force]
+# Usage: download_model.sh [--force] [--target-dir <dir>]
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MODEL_DIR="$REPO_ROOT/models/distilbert-pii"
+DEFAULT_HOME="${HOME:-$REPO_ROOT}/.cloakpipe"
+GLOBAL_HOME="${CLOAKPIPE_HOME:-${CLOAKPIPE_CONFIG_HOME:-$DEFAULT_HOME}}"
+MODEL_DIR="${CLOAKPIPE_MODEL_DIR:-$GLOBAL_HOME/models/distilbert-pii}"
 ONNX_PATH="$MODEL_DIR/quantized/model_quantized.onnx"
 RELEASE_URL="https://github.com/borgius/cloakpipe/releases/download/models-v1/model_quantized.onnx"
 HF_BASE="https://huggingface.co/ab-ai/pii_model_based_on_distilbert/resolve/main"
 HF_TOKENIZER_FILES=(config.json tokenizer_config.json special_tokens_map.json tokenizer.json)
-VENV_DIR="$REPO_ROOT/.cloakpipe/gliner-pii-venv"
+VENV_DIR="$GLOBAL_HOME/gliner-pii-venv"
 VENV_PY="$VENV_DIR/bin/python"
 TORCH_INDEX="https://download.pytorch.org/whl/cpu"
 FORCE=0
 
-for arg in "$@"; do [[ "$arg" == "--force" ]] && FORCE=1; done
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --force)
+            FORCE=1
+            shift
+            ;;
+        --target-dir)
+            if [[ $# -lt 2 ]]; then
+                echo "--target-dir requires a directory" >&2
+                exit 2
+            fi
+            MODEL_DIR="$2"
+            ONNX_PATH="$MODEL_DIR/quantized/model_quantized.onnx"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            exit 2
+            ;;
+    esac
+done
 
 mkdir -p "$MODEL_DIR/quantized"
 

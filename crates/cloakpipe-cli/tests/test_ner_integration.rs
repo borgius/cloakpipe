@@ -118,6 +118,10 @@ impl NerFixture {
         self.tempdir.path()
     }
 
+    fn global_home(&self) -> PathBuf {
+        self.project_root().join("global-home")
+    }
+
     fn prepare_project(&self) -> anyhow::Result<()> {
         let tools_dir = self.project_root().join("tools");
         let fake_site = self.project_root().join("fake-gliner-site");
@@ -138,6 +142,7 @@ impl NerFixture {
     async fn install_and_start(&self) -> StartedSidecar {
         let install_output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
             .current_dir(self.project_root())
+            .env("CLOAKPIPE_HOME", self.global_home())
             .args([
                 "ner",
                 "install",
@@ -158,13 +163,14 @@ impl NerFixture {
         assert!(install_stdout.contains("Falling back to a local virtualenv"));
         assert!(install_stdout.contains("Installed gliner successfully."));
         assert!(self
-            .project_root()
-            .join(".cloakpipe/gliner-pii-venv/bin/python")
+            .global_home()
+            .join("gliner-pii-venv/bin/python")
             .exists());
 
         let port = free_port();
         let child = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
             .current_dir(self.project_root())
+            .env("CLOAKPIPE_HOME", self.global_home())
             .args([
                 "ner",
                 "start",

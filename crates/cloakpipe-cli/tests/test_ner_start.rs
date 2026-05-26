@@ -6,9 +6,10 @@ use std::process::Command;
 #[test]
 fn test_ner_start_dry_run_uses_local_virtualenv_when_present() {
     let dir = tempfile::tempdir().unwrap();
+    let config_home = tempfile::tempdir().unwrap();
     let root = dir.path();
     let nested = root.join("workspace").join("subdir");
-    let venv_python = root.join(venv_python_path());
+    let venv_python = config_home.path().join(venv_python_path());
 
     fs::create_dir_all(root.join("tools")).unwrap();
     fs::create_dir_all(&nested).unwrap();
@@ -22,6 +23,7 @@ fn test_ner_start_dry_run_uses_local_virtualenv_when_present() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
         .current_dir(&nested)
+        .env("CLOAKPIPE_HOME", config_home.path())
         .args([
             "ner",
             "start",
@@ -68,8 +70,8 @@ fn test_ner_start_dry_run_fails_outside_cloakpipe_checkout() {
 
 fn venv_python_path() -> &'static str {
     if cfg!(windows) {
-        ".cloakpipe/gliner-pii-venv/Scripts/python.exe"
+        "gliner-pii-venv/Scripts/python.exe"
     } else {
-        ".cloakpipe/gliner-pii-venv/bin/python"
+        "gliner-pii-venv/bin/python"
     }
 }

@@ -57,8 +57,10 @@ curl -fsSL https://raw.githubusercontent.com/borgius/cloakpipe/refs/heads/main/i
 cargo install --git https://github.com/borgius/cloakpipe --bin cloakpipe cloakpipe-cli
 
 # Start the proxy
-cloakpipe serve --port 3100
+cloakpipe start
 ```
+
+The installer initializes a global CloakPipe home at `~/.cloakpipe` without overwriting existing files. It creates `~/.cloakpipe/cloakpipe.toml`, `~/.cloakpipe/policies/`, and `~/.cloakpipe/models/`. The requested misspellings `~/.cloackpipe` and `cloackpipe.toml` are accepted as compatibility aliases; canonical docs and generated files use `cloakpipe`.
 
 ### Verify it works
 
@@ -166,6 +168,8 @@ Masked Output (total: <20ms on any laptop CPU)
 | **GLiNER-PII sidecar** | `gliner_pii` | 2.3GB | 300ms | 4GB+ RAM | Zero-shot custom entity types via Python sidecar |
 | BERT NER | `bert` | ~400MB | 20-40ms | Any CPU | Legacy 4-type NER (PER/ORG/LOC/MISC) |
 | GLiNER2 | `gliner` | ~800MB | 50ms | Any CPU | Legacy zero-shot NER |
+
+Downloadable/default model assets live under `~/.cloakpipe/models/` by default. Use `cloakpipe ner download` to install DistilBERT-PII there. Managed GLiNER sidecar dependencies live under `~/.cloakpipe/gliner-pii-venv/`.
 
 ### Similar-value pseudonymization
 
@@ -319,7 +323,7 @@ cloakpipe mask "Contact Priya at priya@example.com or +91 98765 43210"
 # Output: "Contact PERSON_001 at chris.hall@gmail.com or +91 464 316 6112"
 
 # Start the proxy server
-cloakpipe serve --port 3100
+cloakpipe start
 
 # Start with a specific bundled policy config
 cloakpipe --config policies/dpdp.toml start
@@ -348,6 +352,11 @@ CLOAKPIPE_TIMEOUT=30                   # Request timeout in seconds
 # Select a bundled policy with: cloakpipe --config policies/dpdp.toml start
 CLOAKPIPE_MIN_CONFIDENCE=0.8          # Minimum NER confidence threshold (0.0–1.0)
 
+# Global CloakPipe home
+CLOAKPIPE_HOME=~/.cloakpipe           # Global config, policies, models, and managed runtimes
+CLOAKPIPE_CONFIG_HOME=~/.cloakpipe    # Backward-compatible alias for the same role
+CLOAKPIPE_MODEL_DIR=~/.cloakpipe/models/distilbert-pii # Optional model download target override
+
 # Vault
 CLOAKPIPE_VAULT_PATH=./vault.db       # Encrypted vault file path
 CLOAKPIPE_VAULT_KEY=                   # 256-bit encryption key (auto-generated if empty)
@@ -357,6 +366,8 @@ CLOAKPIPE_CLOUD_TOKEN=                 # Cloud dashboard token (app.cloakpipe.co
 ```
 
 ### Policy Files
+
+If you omit `--config`, CloakPipe searches from the current directory upward for `cloakpipe.toml`, then `cloackpipe.toml`, and finally falls back to the global config at `~/.cloakpipe/cloakpipe.toml`. Relative paths inside the selected config, such as vault, audit, tree storage, and model paths, are resolved relative to that config file.
 
 CloakPipe ships framework-specific policy presets as full `cloakpipe.toml`-compatible files in [`policies/`](policies/). Use them with the global `--config` flag:
 

@@ -13,6 +13,7 @@
 //! Tokenizer: DeBERTa-v3-based (tokenizer.json in model directory)
 
 use crate::config::NerConfig;
+use crate::paths;
 use crate::{DetectedEntity, DetectionSource, EntityCategory};
 use anyhow::Result;
 use ort::session::Session;
@@ -92,7 +93,19 @@ impl GlinerDetector {
     ///
     /// A `tokenizer.json` must exist in the same directory.
     pub fn new(config: &NerConfig) -> Result<Self> {
-        let model_path = config.model.as_deref().unwrap_or("models/gliner.onnx");
+        let default_model_path;
+        let model_path = match config.model.as_deref() {
+            Some(model) => model,
+            None => {
+                default_model_path = paths::global_gliner_model_path()?;
+                default_model_path.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Global GLiNER model path is not valid UTF-8: {}",
+                        default_model_path.display()
+                    )
+                })?
+            }
+        };
 
         info!("Loading GLiNER2 model from: {}", model_path);
 

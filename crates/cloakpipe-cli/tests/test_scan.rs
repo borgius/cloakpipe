@@ -14,6 +14,8 @@ fn test_scan_detect_only() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .current_dir(dir.path())
+        .env("CLOAKPIPE_HOME", dir.path().join("global"))
         .args(["scan", input.to_str().unwrap(), "--detect-only"])
         .output()
         .expect("failed to run cloakpipe");
@@ -40,6 +42,8 @@ fn test_scan_mask_output() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .current_dir(dir.path())
+        .env("CLOAKPIPE_HOME", dir.path().join("global"))
         .args([
             "scan",
             input_dir.to_str().unwrap(),
@@ -76,6 +80,8 @@ fn test_scan_no_files() {
     fs::create_dir(&input_dir).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .current_dir(dir.path())
+        .env("CLOAKPIPE_HOME", dir.path().join("global"))
         .args(["scan", input_dir.to_str().unwrap(), "--detect-only"])
         .output()
         .expect("failed to run cloakpipe");
@@ -90,12 +96,26 @@ fn test_scan_sample_masks_documented_leaks() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let dir = tempfile::tempdir().unwrap();
     let output_dir = dir.path().join("example-masked");
+    let policy_path = dir.path().join("sample-policy.toml");
+    let policy = fs::read_to_string(workspace.join("policies/minimal.toml"))
+        .unwrap()
+        .replace(
+            "force = []",
+            r#"force = [
+  "Avery Collins",
+  "Dr. Elena Morris",
+  "Avery Collins Family HSA",
+  "1842 Willow Creek Drive",
+  "Apt 5B",
+]"#,
+        );
+    fs::write(&policy_path, policy).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
         .current_dir(&workspace)
         .args([
             "--config",
-            "cloakpipe.toml",
+            policy_path.to_str().unwrap(),
             "scan",
             "assets/example.md",
             "-o",
@@ -105,14 +125,6 @@ fn test_scan_sample_masks_documented_leaks() {
         ])
         .output()
         .expect("failed to run cloakpipe");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("ONNX Runtime") || stderr.contains("DistilBERT-PII model") {
-            eprintln!("skipping model-backed sample scan assertion: {stderr}");
-            return;
-        }
-    }
 
     assert!(
         output.status.success(),
