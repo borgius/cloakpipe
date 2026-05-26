@@ -200,21 +200,25 @@ fn legal_patterns() -> Vec<CustomPattern> {
             name: "case_number".into(),
             regex: r"\d{1,2}:\d{2}-[a-z]{2}-\d{4,6}".into(),
             category: "CASE_NUMBER".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "docket_number".into(),
             regex: r"(?i)docket\s*(?:no\.?\s*)?#?\s*\d[\d-]+".into(),
             category: "DOCKET".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "bar_number".into(),
             regex: r"(?i)bar\s*(?:no\.?\s*)?#?\s*\d{4,8}".into(),
             category: "BAR_NUMBER".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "ssn".into(),
             regex: r"\b\d{3}-\d{2}-\d{4}\b".into(),
             category: "SSN".into(),
+            value_group: None,
         },
     ]
 }
@@ -225,21 +229,25 @@ fn healthcare_patterns() -> Vec<CustomPattern> {
             name: "mrn".into(),
             regex: r"(?i)(?:MRN|medical\s*record)\s*(?:no\.?\s*)?#?\s*\d{6,12}".into(),
             category: "MRN".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "npi".into(),
             regex: r"(?i)NPI\s*(?:no\.?\s*)?#?\s*\d{10}".into(),
             category: "NPI".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "dea_number".into(),
             regex: r"(?i)DEA\s*(?:no\.?\s*)?#?\s*[A-Z]{2}\d{7}".into(),
             category: "DEA".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "icd_code".into(),
             regex: r"\b[A-Z]\d{2}\.\d{1,2}\b".into(),
             category: "ICD_CODE".into(),
+            value_group: None,
         },
     ]
 }
@@ -250,21 +258,25 @@ fn fintech_patterns() -> Vec<CustomPattern> {
             name: "swift_bic".into(),
             regex: r"\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b".into(),
             category: "SWIFT_CODE".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "isin".into(),
             regex: r"\b[A-Z]{2}[A-Z0-9]{9}\d\b".into(),
             category: "ISIN".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "iban".into(),
             regex: r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}(?:[A-Z0-9]){0,16}\b".into(),
             category: "IBAN".into(),
+            value_group: None,
         },
         CustomPattern {
             name: "routing_number".into(),
             regex: r"(?i)(?:routing|ABA)\s*(?:no\.?\s*)?#?\s*\d{9}\b".into(),
             category: "ROUTING_NUMBER".into(),
+            value_group: None,
         },
     ]
 }

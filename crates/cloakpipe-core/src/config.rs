@@ -127,6 +127,8 @@ pub struct CustomPattern {
     pub name: String,
     pub regex: String,
     pub category: String,
+    #[serde(default)]
+    pub value_group: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

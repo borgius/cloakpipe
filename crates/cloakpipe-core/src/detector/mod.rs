@@ -21,7 +21,7 @@ pub mod ner;
 
 #[cfg(feature = "ner")]
 use crate::config::NerBackend;
-use crate::{config::DetectionConfig, DetectedEntity};
+use crate::{config::DetectionConfig, DetectedEntity, DetectionSource};
 use anyhow::Result;
 
 /// The combined detection engine that runs all layers.
@@ -162,16 +162,21 @@ impl Detector {
     }
 
     /// Remove overlapping entity spans.
-    /// Prefers: higher confidence > longer span > earlier detection layer.
+    /// Prefers: higher confidence > longer span > higher-priority detection source.
     fn deduplicate_spans(entities: Vec<DetectedEntity>) -> Vec<DetectedEntity> {
         let mut result: Vec<DetectedEntity> = Vec::new();
         for entity in entities {
             if let Some(last) = result.last() {
                 if entity.start < last.end {
                     // Overlap: prefer higher confidence, then longer span
+                    let entity_len = entity.end - entity.start;
+                    let last_len = last.end - last.start;
                     let replace = entity.confidence > last.confidence
                         || (entity.confidence == last.confidence
-                            && (entity.end - entity.start) > (last.end - last.start));
+                            && (entity_len > last_len
+                                || (entity_len == last_len
+                                    && source_priority(&entity.source)
+                                        > source_priority(&last.source))));
                     if replace {
                         result.pop();
                         result.push(entity);
@@ -182,5 +187,53 @@ impl Detector {
             result.push(entity);
         }
         result
+    }
+}
+
+fn source_priority(source: &DetectionSource) -> u8 {
+    match source {
+        DetectionSource::Pattern => 0,
+        DetectionSource::Financial => 1,
+        DetectionSource::Ner => 2,
+        DetectionSource::Custom => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DetectionSource, EntityCategory};
+
+    fn entity(category: EntityCategory, source: DetectionSource) -> DetectedEntity {
+        DetectedEntity {
+            original: "123456789012".into(),
+            start: 10,
+            end: 22,
+            category,
+            confidence: 1.0,
+            source,
+        }
+    }
+
+    #[test]
+    fn deduplicate_prefers_custom_category_for_same_span() {
+        let entities = vec![
+            entity(
+                EntityCategory::Custom("ACCOUNT_NUMBER".into()),
+                DetectionSource::Pattern,
+            ),
+            entity(
+                EntityCategory::Custom("BANK_ACCOUNT".into()),
+                DetectionSource::Custom,
+            ),
+        ];
+
+        let result = Detector::deduplicate_spans(entities);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].category,
+            EntityCategory::Custom("BANK_ACCOUNT".into())
+        );
     }
 }

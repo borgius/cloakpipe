@@ -943,7 +943,16 @@ fn print_custom_patterns(patterns: &[CustomPattern]) {
 fn custom_pattern_labels(patterns: &[CustomPattern]) -> Vec<String> {
     patterns
         .iter()
-        .map(|pattern| format!("{} [{}] {}", pattern.name, pattern.category, pattern.regex))
+        .map(|pattern| {
+            let value_group = pattern
+                .value_group
+                .map(|group| format!(" value_group={group}"))
+                .unwrap_or_default();
+            format!(
+                "{} [{}{}] {}",
+                pattern.name, pattern.category, value_group, pattern.regex
+            )
+        })
         .collect()
 }
 
@@ -966,12 +975,37 @@ fn prompt_custom_pattern(existing: Option<&CustomPattern>) -> Result<CustomPatte
             .map(|pattern| pattern.category.as_str())
             .unwrap_or_default(),
     )?;
+    let value_group = prompt_optional_usize(
+        "Value capture group (blank for full match)",
+        existing.and_then(|pattern| pattern.value_group),
+    )?;
 
     Ok(CustomPattern {
         name,
         regex,
         category,
+        value_group,
     })
+}
+
+fn prompt_optional_usize(prompt: &str, current: Option<usize>) -> Result<Option<usize>> {
+    use dialoguer::Input;
+
+    loop {
+        let input: String = Input::new()
+            .with_prompt(prompt)
+            .with_initial_text(current.map(|value| value.to_string()).unwrap_or_default())
+            .allow_empty(true)
+            .interact_text()?;
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        match trimmed.parse::<usize>() {
+            Ok(value) => return Ok(Some(value)),
+            Err(_) => println!("Enter a non-negative integer, or leave blank for full match."),
+        }
+    }
 }
 
 fn prompt_non_empty_text(prompt: &str, initial: &str) -> Result<String> {
@@ -995,6 +1029,7 @@ fn custom_pattern_changed(current: &CustomPattern, updated: &CustomPattern) -> b
     current.name != updated.name
         || current.regex != updated.regex
         || current.category != updated.category
+        || current.value_group != updated.value_group
 }
 
 fn remove_selected_indices<T>(values: &mut Vec<T>, selected_indices: &[usize]) -> bool {
@@ -1723,6 +1758,7 @@ mod tests {
             name: "bad".to_string(),
             regex: "[".to_string(),
             category: "BAD".to_string(),
+            value_group: None,
         });
 
         let err = validate_policy_config(&config).unwrap_err();
@@ -1755,6 +1791,7 @@ mod tests {
             name: "bad".to_string(),
             regex: "[".to_string(),
             category: "BAD".to_string(),
+            value_group: None,
         });
 
         let result = save_policy(&path, &config);

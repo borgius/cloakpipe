@@ -88,6 +88,9 @@ fn test_detect_currency_amount() {
     assert!(entities
         .iter()
         .any(|e| e.category == EntityCategory::Amount));
+
+    let entities = detector.detect("Send $500 to alice@example.com").unwrap();
+    assert!(entities.iter().any(|e| e.original == "$500"));
 }
 
 #[test]
@@ -170,6 +173,7 @@ fn test_custom_pattern() {
                 name: "project_codename".into(),
                 regex: r"Project\s+(Alpha|Beta|Gamma)".into(),
                 category: "PROJECT".into(),
+                value_group: None,
             }],
         },
         overrides: OverrideConfig::default(),

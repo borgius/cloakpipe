@@ -21,11 +21,11 @@ impl FinancialDetector {
             dates_enabled: config.dates,
             // Matches: $1.2M, ₹3.4L Cr, €500K, £2.1B, $12,345.67, etc.
             amount_regex: Regex::new(
-                r"(?:[$€£₹¥])[ \t]*[\d,]+(?:\.\d+)?[ \t]*(?:[KMBT]|[Ll](?:akh)?|[Cc]r(?:ore)?)?(?:[ \t]+(?:million|billion|trillion|crore|lakh))?",
+                r"(?:[$€£₹¥])[ \t]*[\d,]+(?:\.\d+)?(?:[ \t]*(?:[KMBT]|[Ll](?:akh)?|[Cc]r(?:ore)?)(?:[ \t]+(?:million|billion|trillion|crore|lakh))?|[ \t]+(?:million|billion|trillion|crore|lakh))?",
             )?,
             // Matches: INR 18,00,000 / USD 1,234.56 / EUR 500
             amount_inr_regex: Regex::new(
-                r"\b(?:INR|USD|EUR|GBP|JPY)[ \t]+[\d,]+(?:\.\d+)?[ \t]*(?:[KMBT]|[Ll](?:akh)?|[Cc]r(?:ore)?)?",
+                r"\b(?:INR|USD|EUR|GBP|JPY)[ \t]+[\d,]+(?:\.\d+)?(?:[ \t]*(?:[KMBT]|[Ll](?:akh)?|[Cc]r(?:ore)?))?",
             )?,
             // Matches: 12%, 3.5%, -2.1%
             percent_regex: Regex::new(r"-?\d+(?:\.\d+)?%")?,
