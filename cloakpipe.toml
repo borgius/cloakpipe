@@ -7,7 +7,19 @@ api_key_env = "OLLAMA_API_KEY"
 timeout_seconds = 120
 max_concurrent = 256
 mode = "proxy"
+dry_run = false
+bypass = []
+auth_mode = "pass-through"
 masking_strategy = "similar"
+
+[proxy.provider_routes]
+
+[proxy.http_proxy]
+inspect_https = false
+allowed_hosts = []
+tunnel_unknown_hosts = true
+http2_mitm = false
+forward_no_proxy = []
 
 [vault]
 path = "./vault.enc"
@@ -29,8 +41,6 @@ urls_internal = true
 enabled = true
 backend = "distilbert_pii"
 confidence_threshold = 0.4
-# Empty list enables every DistilBERT-PII label. To narrow NER, list labels or
-# aliases such as ["PERSON", "EMAIL", "SSN", "BANK_ACCOUNT"].
 entity_types = []
 sidecar_url = ""
 

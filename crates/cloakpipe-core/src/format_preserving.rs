@@ -512,6 +512,7 @@ pub fn generate(original: &str, category: &EntityCategory, id: u32) -> String {
         EntityCategory::Custom(name) => {
             // For custom categories like Aadhaar, PAN, GSTIN, detect by name
             match name.to_uppercase().as_str() {
+                "TEST" => reverse_value(original, id),
                 "AADHAAR" | "AADHAAR_NUMBER" => fake_aadhaar(id),
                 "PAN" | "PAN_CARD" => fake_pan(id),
                 "GSTIN" => fake_gstin(id),
@@ -538,6 +539,7 @@ pub fn generate_similar(original: &str, category: &EntityCategory, id: u32) -> S
         EntityCategory::Url => fake_similar_url(original, id),
         EntityCategory::Secret => fake_similar_secret(original, id),
         EntityCategory::Custom(name) => match name.to_uppercase().as_str() {
+            "TEST" => reverse_value(original, id),
             "SSN" | "SOCIAL_SECURITY_NUMBER" => fake_ssn(id),
             "CREDIT_CARD" | "CREDIT_CARD_NUMBER" | "PAYMENT_CARD" => fake_credit_card(original, id),
             "ID_NUMBER" | "LICENSE_NUMBER" | "NPI" | "MRN" | "DEA" => {
@@ -1212,6 +1214,10 @@ fn fake_demographic_word(original: &str, id: u32) -> String {
     fake
 }
 
+fn reverse_value(original: &str, id: u32) -> String {
+    ensure_changed(original, original.chars().rev().collect(), id)
+}
+
 fn ensure_changed(original: &str, mut fake: String, id: u32) -> String {
     if fake != original {
         return fake;
@@ -1457,6 +1463,13 @@ mod tests {
     }
 
     #[test]
+    fn generate_reverses_test_custom_category() {
+        let fake = generate("test", &EntityCategory::Custom("TEST".into()), 1);
+
+        assert_eq!(fake, "tset");
+    }
+
+    #[test]
     fn fake_data_dictionaries_have_broad_variants() {
         for (name, len) in [
             ("domains", FAKE_DOMAINS.len()),
@@ -1691,5 +1704,12 @@ mod tests {
         );
         assert_eq!(fake.len(), "ghp_abc123secrettoken".len());
         assert_ne!(fake, "ghp_abc123secrettoken");
+    }
+
+    #[test]
+    fn generate_similar_reverses_test_custom_category() {
+        let fake = generate_similar("test", &EntityCategory::Custom("TEST".into()), 1);
+
+        assert_eq!(fake, "tset");
     }
 }

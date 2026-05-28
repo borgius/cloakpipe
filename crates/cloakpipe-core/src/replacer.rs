@@ -224,6 +224,28 @@ mod tests {
     }
 
     #[test]
+    fn test_pseudonymize_default_strategy_reverses_test_category() {
+        let text = "Value: test";
+        let entities = vec![make_entity(
+            "test",
+            7,
+            11,
+            EntityCategory::Custom("TEST".into()),
+        )];
+        let mut vault = Vault::ephemeral();
+        let result = Replacer::pseudonymize_with_strategy(
+            text,
+            &entities,
+            &mut vault,
+            MaskingStrategy::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.text, "Value: tset");
+        assert_eq!(result.mappings.get("tset"), Some(&"test".to_string()));
+    }
+
+    #[test]
     fn test_pseudonymize_fp_email() {
         let text = "Email: priya@example.com";
         let entities = vec![make_entity(
