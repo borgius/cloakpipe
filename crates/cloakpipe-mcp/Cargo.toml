@@ -7,8 +7,8 @@ repository.workspace = true
 description = "MCP server for CloakPipe — expose privacy tools to AI agents"
 
 [dependencies]
-cloakpipe-core = { path = "../cloakpipe-core", version = "0.14.0" }
-cloakpipe-audit = { path = "../cloakpipe-audit", version = "0.14.0" }
+cloakpipe-core = { path = "../cloakpipe-core", version = "0.15.0" }
+cloakpipe-audit = { path = "../cloakpipe-audit", version = "0.15.0" }
 rmcp = { workspace = true }
 tokio.workspace = true
 serde.workspace = true
