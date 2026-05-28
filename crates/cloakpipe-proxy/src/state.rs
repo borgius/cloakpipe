@@ -2,7 +2,7 @@
 
 use cloakpipe_audit::AuditSink;
 use cloakpipe_core::{
-    config::{CloakPipeConfig, DetectionConfig},
+    config::{CloakPipeConfig, DetectionConfig, ProxyAuthMode},
     detector::Detector,
     session::{ensure_global_session, SessionManager},
     vault::Vault,
@@ -62,5 +62,21 @@ impl AppState {
     /// Return the standard missing-key message for upstream-backed routes.
     pub fn missing_api_key_message(&self) -> String {
         format!("Set {} with your API key", self.config.proxy.api_key_env)
+    }
+
+    /// Return whether llm-http mode should forward caller credentials directly.
+    pub fn use_passthrough_auth(&self) -> bool {
+        matches!(self.config.proxy.auth_mode, ProxyAuthMode::PassThrough)
+    }
+
+    /// Return whether the given upstream should bypass request mutation and response rehydration.
+    pub fn should_bypass_upstream(&self, upstream: &str) -> bool {
+        let upstream = upstream.to_ascii_lowercase();
+        self.config
+            .proxy
+            .bypass
+            .iter()
+            .map(|pattern| pattern.to_ascii_lowercase())
+            .any(|pattern| upstream.contains(&pattern))
     }
 }

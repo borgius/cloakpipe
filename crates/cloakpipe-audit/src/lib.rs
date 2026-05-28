@@ -317,6 +317,10 @@ impl AuditSink {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "audit logging forwards optional counters and metadata to a single entry builder"
+    )]
     fn log_event(
         &self,
         ctx: AuditContext<'_>,
@@ -360,7 +364,10 @@ impl AuditSink {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "audit entries are constructed from several optional counters plus shared request metadata"
+)]
 fn build_entry(
     ctx: AuditContext<'_>,
     event: AuditEvent,

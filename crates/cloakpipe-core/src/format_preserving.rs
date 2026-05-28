@@ -635,9 +635,7 @@ fn fake_similar_phone(original: &str, id: u32) -> String {
 fn fake_similar_url(original: &str, id: u32) -> String {
     let trimmed = original.trim();
     let (scheme, remainder) = split_url_scheme(trimmed);
-    let authority_end = remainder
-        .find(|c| matches!(c, '/' | '?' | '#'))
-        .unwrap_or(remainder.len());
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
     let authority = &remainder[..authority_end];
     let suffix = &remainder[authority_end..];
 

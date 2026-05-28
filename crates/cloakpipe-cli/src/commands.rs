@@ -1827,6 +1827,10 @@ fn print_gliner_next_steps() {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "command tests are colocated with CLI helpers; moving this large module is separate cleanup"
+)]
 mod tests {
     use super::*;
 
@@ -2468,7 +2472,12 @@ fn default_config() -> CloakPipeConfig {
             api_key_env: "OPENAI_API_KEY".into(),
             timeout_seconds: 120,
             max_concurrent: 256,
-            mode: "proxy".into(),
+            mode: cloakpipe_core::config::ProxyMode::Proxy,
+            dry_run: false,
+            bypass: Vec::new(),
+            auth_mode: cloakpipe_core::config::ProxyAuthMode::PassThrough,
+            provider_routes: HashMap::new(),
+            http_proxy: Default::default(),
             masking_strategy: cloakpipe_core::MaskingStrategy::default(),
         },
         vault: cloakpipe_core::config::VaultConfig {

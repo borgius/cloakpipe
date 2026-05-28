@@ -255,23 +255,21 @@ fn detect_real_python() -> anyhow::Result<String> {
     anyhow::bail!("python3 or python is required for GLiNER integration tests")
 }
 
-fn wait_for_sidecar(port: u16) -> impl std::future::Future<Output = ()> {
-    async move {
-        let client = Client::new();
-        for _ in 0..50 {
-            if let Ok(response) = client
-                .get(format!("http://127.0.0.1:{port}/health"))
-                .send()
-                .await
-            {
-                if response.status().is_success() {
-                    return;
-                }
+async fn wait_for_sidecar(port: u16) {
+    let client = Client::new();
+    for _ in 0..50 {
+        if let Ok(response) = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+        {
+            if response.status().is_success() {
+                return;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        panic!("GLiNER sidecar did not become healthy on port {port}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    panic!("GLiNER sidecar did not become healthy on port {port}");
 }
 
 fn free_port() -> u16 {

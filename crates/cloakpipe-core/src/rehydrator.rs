@@ -120,12 +120,12 @@ fn has_token_boundary(text: &str, token: &str, start: usize, end: usize) -> bool
         || text[..start]
             .chars()
             .next_back()
-            .map_or(true, |c| !c.is_ascii_alphanumeric());
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
     let after_ok = !ends_with_word
         || text[end..]
             .chars()
             .next()
-            .map_or(true, |c| !c.is_ascii_alphanumeric());
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
 
     before_ok && after_ok
 }

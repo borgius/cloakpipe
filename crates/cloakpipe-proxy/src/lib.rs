@@ -5,6 +5,10 @@
 //! the response before returning it to the caller.
 
 pub mod handlers;
+pub mod http_proxy;
+pub mod json_filter;
+pub mod llm_http;
+pub mod routing;
 pub mod server;
 pub mod state;
 pub mod streaming;

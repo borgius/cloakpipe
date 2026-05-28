@@ -421,16 +421,7 @@ impl DistilBertPiiDetector {
         for (i, token) in tokens.iter().enumerate() {
             if token == "[CLS]" || token == "[SEP]" || token == "[PAD]" {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(
-                        &mut entities,
-                        text,
-                        &text_val,
-                        start,
-                        end,
-                        base_offset,
-                        conf,
-                        cat,
-                    );
+                    push_entity(&mut entities, &text_val, start, end, base_offset, conf, cat);
                 }
                 continue;
             }
@@ -449,32 +440,14 @@ impl DistilBertPiiDetector {
 
             if (confidence as f64) < self.confidence_threshold {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(
-                        &mut entities,
-                        text,
-                        &text_val,
-                        start,
-                        end,
-                        base_offset,
-                        conf,
-                        cat,
-                    );
+                    push_entity(&mut entities, &text_val, start, end, base_offset, conf, cat);
                 }
                 continue;
             }
 
             if label == "O" || !self.entity_filter.allows(label) {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(
-                        &mut entities,
-                        text,
-                        &text_val,
-                        start,
-                        end,
-                        base_offset,
-                        conf,
-                        cat,
-                    );
+                    push_entity(&mut entities, &text_val, start, end, base_offset, conf, cat);
                 }
                 continue;
             }
@@ -483,16 +456,7 @@ impl DistilBertPiiDetector {
 
             if label.starts_with("B-") {
                 if let Some((text_val, start, end, conf, cat)) = current.take() {
-                    push_entity(
-                        &mut entities,
-                        text,
-                        &text_val,
-                        start,
-                        end,
-                        base_offset,
-                        conf,
-                        cat,
-                    );
+                    push_entity(&mut entities, &text_val, start, end, base_offset, conf, cat);
                 }
                 let category = label_to_category(label);
                 let entity_text = &text[off_start..off_end];
@@ -544,7 +508,7 @@ impl DistilBertPiiDetector {
                         *conf = (*conf + confidence as f64) / 2.0;
                     } else {
                         let (tv, s, e, c, ct) = current.take().unwrap();
-                        push_entity(&mut entities, text, &tv, s, e, base_offset, c, ct);
+                        push_entity(&mut entities, &tv, s, e, base_offset, c, ct);
                         let category = label_to_category(label);
                         let entity_text = &text[off_start..off_end];
                         current = Some((
@@ -560,16 +524,7 @@ impl DistilBertPiiDetector {
         }
 
         if let Some((text_val, start, end, conf, cat)) = current.take() {
-            push_entity(
-                &mut entities,
-                text,
-                &text_val,
-                start,
-                end,
-                base_offset,
-                conf,
-                cat,
-            );
+            push_entity(&mut entities, &text_val, start, end, base_offset, conf, cat);
         }
 
         Ok(entities)
@@ -618,7 +573,6 @@ fn next_char_boundary(text: &str, mut index: usize) -> usize {
 
 fn push_entity(
     entities: &mut Vec<DetectedEntity>,
-    _original_text: &str,
     text: &str,
     start: usize,
     end: usize,

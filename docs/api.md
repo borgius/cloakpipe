@@ -34,9 +34,67 @@ So the examples in this document use:
 
 - `http://127.0.0.1:8900`
 
+### Proxy modes
+
+`[proxy].mode` decides which LLM handler is active.
+
+- `mode = "proxy"` keeps the legacy fixed OpenAI-compatible routes.
+- `mode = "llm-http"` enables a raw multi-provider HTTP proxy for non-internal LLM traffic.
+- `mode = "http-proxy"` enables an explicit forward proxy for clients configured with `HTTP_PROXY` or `HTTPS_PROXY`.
+
+Minimal examples:
+
+```toml
+[proxy]
+listen = "127.0.0.1:8900"
+upstream = "https://api.openai.com"
+mode = "proxy"
+masking_strategy = "similar"
+```
+
+```toml
+[proxy]
+listen = "127.0.0.1:8900"
+upstream = "https://api.openai.com"
+mode = "llm-http"
+masking_strategy = "similar"
+dry_run = false
+bypass = ["generativelanguage.googleapis.com"]
+auth_mode = "pass-through"
+
+[proxy.provider_routes]
+anthropic = "https://api.anthropic.com"
+```
+
+```toml
+[proxy]
+listen = "127.0.0.1:8900"
+upstream = "https://api.openai.com"
+mode = "http-proxy"
+masking_strategy = "similar"
+auth_mode = "pass-through"
+
+[proxy.http_proxy]
+inspect_https = false
+tunnel_unknown_hosts = true
+allowed_hosts = ["api.openai.com", "api.anthropic.com"]
+```
+
+`proxy.upstream` is the default OpenAI-compatible base URL for the fixed `proxy` handler and the OpenAI-compatible fallback in `llm-http`. In `llm-http` mode, `proxy.provider_routes` lets you override provider-specific upstreams. `openai` is optional because the proxy already uses `proxy.upstream` for OpenAI-compatible paths.
+
+In `http-proxy` mode, callers keep their SDK or app pointed at the real provider and set proxy environment variables for that process:
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:8900
+export HTTPS_PROXY=http://127.0.0.1:8900
+export NO_PROXY=localhost,127.0.0.1
+```
+
+Plain HTTP requests are inspected and mutated when they use the normal forward-proxy absolute-form request target, for example `POST http://api.example.test/v1/chat/completions HTTP/1.1`. HTTPS requests use `CONNECT host:port`; CloakPipe currently tunnels CONNECT bytes unchanged. HTTPS request-body mutation requires a future explicit local CA/MITM layer and is not active today.
+
 ### Required server-side configuration
 
-The proxy authenticates to the upstream LLM provider with the environment variable named by `proxy.api_key_env`.
+Legacy `proxy` mode authenticates to the upstream LLM provider with the environment variable named by `proxy.api_key_env`.
 
 Examples:
 
@@ -53,14 +111,23 @@ The server can still start if this variable is missing. In that mode, the direct
 - `/v1/configure`
 - `/v1/session_context`
 
-LLM-backed routes such as `/v1/chat/completions`, `/v1/embeddings`, and tree routes that call the upstream model return `503 Service Unavailable` until the variable is set.
+In `proxy` mode, LLM-backed routes such as `/v1/chat/completions`, `/v1/embeddings`, and tree routes that call the upstream model return `503 Service Unavailable` until the variable is set.
 
-The client does **not** need to supply the real upstream provider key to CloakPipe. The current implementation ignores the inbound `Authorization` header and always sends the server-side key configured in the process environment.
+In `proxy` mode, the client does **not** need to supply the real upstream provider key to CloakPipe. The current implementation ignores the inbound `Authorization` header and always sends the server-side key configured in the process environment.
 
 That means:
 
 - `curl` calls can omit `Authorization` entirely.
 - OpenAI-style SDKs that insist on an API key can use any non-empty placeholder when talking to CloakPipe, unless you put your own auth gateway in front of it.
+
+In `llm-http` mode, the default is the opposite:
+
+- `auth_mode = "pass-through"` forwards inbound auth headers such as `Authorization`, `x-api-key`, and provider-specific beta/version headers after filtering hop-by-hop headers.
+- `auth_mode = "server-key"` injects the server-side key from `proxy.api_key_env` as a bearer token. Use this only when that auth shape matches your upstream.
+
+So for `llm-http`, your client usually **does** send the provider credential it would send directly to the provider.
+
+`http-proxy` mode uses the same auth handling as `llm-http`: `auth_mode = "pass-through"` forwards provider credentials by default, while hop-by-hop and proxy-only headers such as `Proxy-Authorization` and `Proxy-Connection` are stripped before the upstream request.
 
 ### Persistence and vault behavior
 
@@ -115,6 +182,9 @@ If you are building a client, treat error bodies as opaque text unless you know 
 | `/v1/session_context` or `/session_context` | `POST` | Direct MCP-style session inspection |
 | `/v1/chat/completions` | `POST` | Pseudonymize chat input, proxy upstream, then rehydrate the response |
 | `/v1/embeddings` | `POST` | Pseudonymize embedding input, proxy upstream |
+| `/*path` (when `proxy.mode = "llm-http"`) | `ANY` | Raw multi-provider LLM proxy with request mutation and response rehydration |
+| Absolute-form `http://...` (when `proxy.mode = "http-proxy"`) | `ANY` | Explicit forward-proxy HTTP request with request mutation and response rehydration |
+| Authority-form `CONNECT host:port` (when `proxy.mode = "http-proxy"`) | `CONNECT` | HTTPS tunnel relay; encrypted bytes are currently passed through unchanged |
 | `/tree/index` | `POST` | Build and save a tree index from raw text |
 | `/tree/index/file` | `POST` | Build and save a tree index from a file path on the server |
 | `/tree/list` | `GET` | List saved tree indices |
@@ -149,6 +219,10 @@ Health check response:
 ```
 
 ### `POST /v1/chat/completions`
+
+When `proxy.mode = "proxy"`, this path uses the legacy OpenAI-specific handler described below.
+
+When `proxy.mode = "llm-http"`, the same path is handled by the raw catch-all route described in [`ANY /*path` in `llm-http` mode](#any-path-in-llm-http-mode).
 
 This is the main endpoint. It accepts an OpenAI-style chat request, masks sensitive text in the prompt, forwards the masked payload to the upstream provider, and then restores tokens in the response.
 
@@ -272,6 +346,10 @@ If CloakPipe itself fails before the upstream call, it returns a local error suc
 
 ### `POST /v1/embeddings`
 
+When `proxy.mode = "proxy"`, this path uses the legacy embeddings handler described below.
+
+When `proxy.mode = "llm-http"`, the same path is handled by the raw catch-all route described in [`ANY /*path` in `llm-http` mode](#any-path-in-llm-http-mode).
+
 This endpoint pseudonymizes embedding input and forwards the request upstream.
 
 #### What it masks
@@ -319,6 +397,65 @@ Embeddings response example:
   "model": "text-embedding-3-small"
 }
 ```
+
+### `ANY /*path` in `llm-http` mode
+
+This route is active only when `proxy.mode = "llm-http"`.
+
+The router keeps internal API, tree, and session routes exact. Everything else is matched by a raw catch-all proxy that works with plain text and provider JSON bodies instead of the legacy OpenAI-only request extractors.
+
+#### Provider routing
+
+The current `llm-http` resolver supports:
+
+- OpenAI-compatible paths such as `/v1/*`, `/responses`, `/chat/completions`, `/embeddings`, and `/models`
+- Anthropic-prefixed paths such as `/anthropic/v1/messages`
+
+Resolution rules:
+
+- OpenAI-compatible paths go to `proxy.upstream` by default.
+- `/anthropic/...` goes to `proxy.provider_routes.anthropic` when configured, or `https://api.anthropic.com` otherwise.
+- Unknown paths fail closed with `502` instead of being forwarded to an arbitrary upstream.
+
+Useful client base URLs:
+
+- OpenAI-compatible SDKs: `http://127.0.0.1:8900`
+- Anthropic-prefixed traffic: `http://127.0.0.1:8900/anthropic`
+
+#### Request mutation rules
+
+`llm-http` mutates only textual request bodies that it can inspect safely.
+
+- Eligible bodies: JSON, `text/*`, `application/json`, `+json`, XML-like text, JavaScript-like text, and NDJSON.
+- Skipped unchanged: multipart uploads, binary bodies, non-text data URLs, compressed request bodies, and undecodable payloads.
+- In JSON, CloakPipe mutates content-bearing fields such as `content`, `text`, `messages`, `system`, `input`, `instructions`, `description`, `prompt`, and tool-result-like fields.
+- It leaves auth fields, IDs, model/config fields, signatures, encrypted envelopes, and `metadata` objects unchanged.
+- Anthropic signed thinking objects and `encrypted_content` / `ciphertext` objects are skipped byte-for-byte.
+
+The handler uses `proxy.masking_strategy`, so `similar` mode produces plausible fake values instead of only `EMAIL_1`-style tokens.
+
+#### Dry-run and bypass behavior
+
+- `dry_run = true` detects and audits what would change, but forwards the original request body unchanged.
+- `bypass = ["substring"]` matches against the resolved upstream base URL. Matching providers skip both request mutation and response rehydration.
+
+In both cases, CloakPipe still filters hop-by-hop request headers and forces `accept-encoding: identity` on the upstream request so textual responses are easier to handle.
+
+#### Response handling
+
+For non-streaming textual responses, `llm-http` rehydrates across the whole body instead of looking only at provider-specific JSON fields. This works for JSON, plain text, NDJSON, XML-like text, and JavaScript-like responses.
+
+For streaming textual responses, `llm-http` uses a raw overlap buffer instead of the legacy OpenAI-delta parser. That allows response rehydration even when a plausible fake value is split across chunk boundaries.
+
+The proxy skips response rewriting when any of these is true:
+
+- `dry_run = true`
+- the upstream matches `bypass`
+- the response is non-text
+- the response is compressed and not safely rewritable
+- the body appears to contain signed thinking payloads or encrypted envelopes
+
+When the body changes, CloakPipe strips stale `content-length` and `transfer-encoding` headers before returning the response.
 
 ## Direct privacy tool endpoints
 

@@ -3,6 +3,7 @@
 use crate::resolver::ResolverConfig;
 use crate::session::SessionConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CloakPipeConfig {
@@ -35,9 +36,71 @@ pub struct ProxyConfig {
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
     #[serde(default = "default_mode")]
-    pub mode: String,
+    pub mode: ProxyMode,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub bypass: Vec<String>,
+    #[serde(default = "default_auth_mode")]
+    pub auth_mode: ProxyAuthMode,
+    #[serde(default)]
+    pub provider_routes: HashMap<String, String>,
+    #[serde(default)]
+    pub http_proxy: HttpProxyConfig,
     #[serde(default)]
     pub masking_strategy: crate::MaskingStrategy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProxyMode {
+    #[default]
+    #[serde(alias = "cloaktree")]
+    Proxy,
+    #[serde(alias = "llm_http")]
+    LlmHttp,
+    #[serde(alias = "http_proxy")]
+    HttpProxy,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HttpProxyConfig {
+    #[serde(default)]
+    pub inspect_https: bool,
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    #[serde(default = "default_tunnel_unknown_hosts")]
+    pub tunnel_unknown_hosts: bool,
+    pub ca_cert_path: Option<String>,
+    pub ca_key_path: Option<String>,
+    pub cert_cache_dir: Option<String>,
+    #[serde(default)]
+    pub http2_mitm: bool,
+    pub max_connect_tunnels: Option<usize>,
+}
+
+impl Default for HttpProxyConfig {
+    fn default() -> Self {
+        Self {
+            inspect_https: false,
+            allowed_hosts: Vec::new(),
+            tunnel_unknown_hosts: true,
+            ca_cert_path: None,
+            ca_key_path: None,
+            cert_cache_dir: None,
+            http2_mitm: false,
+            max_connect_tunnels: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProxyAuthMode {
+    #[default]
+    PassThrough,
+    #[serde(alias = "server_key")]
+    ServerKey,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -209,8 +272,14 @@ fn default_timeout() -> u64 {
 fn default_max_concurrent() -> usize {
     256
 }
-fn default_mode() -> String {
-    "cloaktree".into()
+fn default_mode() -> ProxyMode {
+    ProxyMode::Proxy
+}
+fn default_auth_mode() -> ProxyAuthMode {
+    ProxyAuthMode::PassThrough
+}
+fn default_tunnel_unknown_hosts() -> bool {
+    true
 }
 fn default_encryption() -> String {
     "aes-256-gcm".into()
@@ -283,12 +352,22 @@ impl Default for AuditConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{NerBackend, NerConfig};
+    use super::{HttpProxyConfig, NerBackend, NerConfig, ProxyAuthMode, ProxyMode};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Deserialize, Serialize)]
     struct NerBackendDoc {
         backend: NerBackend,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct ProxyModeDoc {
+        mode: ProxyMode,
+    }
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct ProxyAuthModeDoc {
+        auth_mode: ProxyAuthMode,
     }
 
     #[test]
@@ -315,5 +394,75 @@ mod tests {
         let doc: NerBackendDoc = toml::from_str("backend = \"distilbertpii\"").unwrap();
 
         assert!(matches!(doc.backend, NerBackend::DistilBertPii));
+    }
+
+    #[test]
+    fn proxy_mode_defaults_to_proxy() {
+        assert!(matches!(super::default_mode(), ProxyMode::Proxy));
+    }
+
+    #[test]
+    fn proxy_mode_serializes_documented_llm_http_name() {
+        assert_eq!(
+            toml::to_string(&ProxyModeDoc {
+                mode: ProxyMode::LlmHttp,
+            })
+            .unwrap(),
+            "mode = \"llm-http\"\n"
+        );
+    }
+
+    #[test]
+    fn proxy_mode_accepts_snake_case_alias() {
+        let doc: ProxyModeDoc = toml::from_str("mode = \"llm_http\"").unwrap();
+
+        assert!(matches!(doc.mode, ProxyMode::LlmHttp));
+    }
+
+    #[test]
+    fn proxy_mode_accepts_legacy_cloaktree_alias() {
+        let doc: ProxyModeDoc = toml::from_str("mode = \"cloaktree\"").unwrap();
+
+        assert!(matches!(doc.mode, ProxyMode::Proxy));
+    }
+
+    #[test]
+    fn proxy_mode_serializes_documented_http_proxy_name() {
+        assert_eq!(
+            toml::to_string(&ProxyModeDoc {
+                mode: ProxyMode::HttpProxy,
+            })
+            .unwrap(),
+            "mode = \"http-proxy\"\n"
+        );
+    }
+
+    #[test]
+    fn proxy_mode_accepts_http_proxy_snake_case_alias() {
+        let doc: ProxyModeDoc = toml::from_str("mode = \"http_proxy\"").unwrap();
+
+        assert!(matches!(doc.mode, ProxyMode::HttpProxy));
+    }
+
+    #[test]
+    fn http_proxy_config_defaults_are_safe() {
+        let config = HttpProxyConfig::default();
+
+        assert!(!config.inspect_https);
+        assert!(config.allowed_hosts.is_empty());
+        assert!(config.tunnel_unknown_hosts);
+        assert!(!config.http2_mitm);
+        assert!(config.max_connect_tunnels.is_none());
+    }
+
+    #[test]
+    fn proxy_auth_mode_serializes_documented_pass_through_name() {
+        assert_eq!(
+            toml::to_string(&ProxyAuthModeDoc {
+                auth_mode: ProxyAuthMode::PassThrough,
+            })
+            .unwrap(),
+            "auth_mode = \"pass-through\"\n"
+        );
     }
 }
