@@ -524,6 +524,7 @@ fn preflight_http_proxy_config(config: &CloakPipeConfig) -> Result<()> {
     }
 
     match detect_ca_trust(&status.paths) {
+        #[cfg(target_os = "macos")]
         TrustStatus::Trusted => tracing::info!("CloakPipe root CA appears to be trusted"),
         TrustStatus::NotTrusted => bail!(
             "HTTPS inspection is enabled, but the CloakPipe root CA does not appear to be trusted.\n\n{}",
@@ -790,6 +791,7 @@ fn format_ca_paths(status: &tls_mitm::CaStatus) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TrustStatus {
+    #[cfg(target_os = "macos")]
     Trusted,
     NotTrusted,
     Unknown,
@@ -798,6 +800,7 @@ enum TrustStatus {
 impl std::fmt::Display for TrustStatus {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(target_os = "macos")]
             Self::Trusted => formatter.write_str("trusted"),
             Self::NotTrusted => formatter.write_str("not trusted"),
             Self::Unknown => formatter.write_str("unknown"),
