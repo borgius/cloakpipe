@@ -1810,7 +1810,11 @@ fn ner_status(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn render_ner_status_json(home: &Path, models_dir: &Path, reports: &[NerModelReport]) -> Result<String> {
+fn render_ner_status_json(
+    home: &Path,
+    models_dir: &Path,
+    reports: &[NerModelReport],
+) -> Result<String> {
     let models: Vec<serde_json::Value> = reports.iter().map(ner_model_report_json).collect();
 
     serde_json::to_string_pretty(&serde_json::json!({
@@ -1933,7 +1937,10 @@ fn build_ner_model_report(
 fn print_ner_model_report(report: &NerModelReport) {
     println!("{} {}", report.status.icon(), report.name);
     println!("  status: {}", report.status);
-    println!("  files: {}/{} present", report.files_present, report.total_files);
+    println!(
+        "  files: {}/{} present",
+        report.files_present, report.total_files
+    );
     println!("  location: {}", report.location.display());
 
     if !report.missing_files.is_empty() {
@@ -3063,7 +3070,7 @@ fn default_config() -> CloakPipeConfig {
             api_key_env: "OPENAI_API_KEY".into(),
             timeout_seconds: 120,
             max_concurrent: 256,
-            mode: cloakpipe_core::config::ProxyMode::Proxy,
+            mode: cloakpipe_core::config::ProxyMode::LlmProxy,
             dry_run: false,
             bypass: Vec::new(),
             auth_mode: cloakpipe_core::config::ProxyAuthMode::PassThrough,

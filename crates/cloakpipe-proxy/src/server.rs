@@ -1,6 +1,6 @@
 //! HTTP server setup and router configuration.
 
-use crate::{handlers, http_proxy, llm_http, state::AppState, tree_handlers};
+use crate::{handlers, http_proxy, llm_proxy, state::AppState, tree_handlers};
 use axum::{
     routing::any,
     routing::{get, post},
@@ -58,15 +58,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         );
 
     let router = match state.config.proxy.mode {
-        ProxyMode::Proxy => router
-            .route(
-                "/v1/chat/completions",
-                post(handlers::proxy_chat_completions),
-            )
-            .route("/v1/embeddings", post(handlers::proxy_embeddings)),
-        ProxyMode::LlmHttp => router
-            .route("/", any(llm_http::proxy_request))
-            .route("/*path", any(llm_http::proxy_request)),
+        ProxyMode::LlmProxy => router
+            .route("/", any(llm_proxy::proxy_request))
+            .route("/*path", any(llm_proxy::proxy_request)),
         ProxyMode::HttpProxy => Router::new()
             .route("/", any(http_proxy::proxy_request))
             .route("/*path", any(http_proxy::proxy_request))
@@ -96,7 +90,7 @@ pub async fn serve_listener(listener: TcpListener, state: AppState) -> anyhow::R
 
     match state.config.proxy.mode {
         ProxyMode::HttpProxy => serve_http_proxy_listener(listener, state).await,
-        ProxyMode::Proxy | ProxyMode::LlmHttp => {
+        ProxyMode::LlmProxy => {
             let app = build_router(state);
             axum::serve(listener, app).await?;
             Ok(())

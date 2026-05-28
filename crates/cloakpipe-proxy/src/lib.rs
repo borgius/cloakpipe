@@ -7,7 +7,7 @@
 pub mod handlers;
 pub mod http_proxy;
 pub mod json_filter;
-pub mod llm_http;
+pub mod llm_proxy;
 pub mod outbound_proxy;
 pub mod routing;
 pub mod server;

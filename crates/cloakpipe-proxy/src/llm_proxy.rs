@@ -1,4 +1,4 @@
-//! Raw LLM HTTP proxy handler for opt-in multi-provider traffic.
+//! Raw LLM proxy handler for opt-in multi-provider traffic.
 
 use crate::{json_filter, routing, state::AppState, streaming};
 use axum::{
@@ -9,7 +9,7 @@ use axum::{
 };
 use cloakpipe_audit::AuditContext;
 use cloakpipe_core::{
-    rehydrator::Rehydrator, replacer::Replacer, vault::Vault, DetectedEntity, EntityCategory,
+    detector::Detector, rehydrator::Rehydrator, vault::Vault, DetectedEntity, EntityCategory,
     MaskingStrategy, PseudoToken,
 };
 use http_body_util::BodyExt;
@@ -32,7 +32,7 @@ struct TextMutation {
     tokens: Vec<PseudoToken>,
 }
 
-/// Catch-all raw proxy handler used only when `proxy.mode = "llm-http"`.
+/// Catch-all raw proxy handler used only when `proxy.mode = "llm-proxy"`.
 pub async fn proxy_request(
     State(state): State<Arc<AppState>>,
     method: Method,
@@ -375,9 +375,7 @@ pub(crate) async fn build_upstream_response(
         )
     })?;
 
-    if skip_rehydration
-        || mappings.is_empty()
-        || !json_filter::is_textual_content_type(&content_type)
+    if !json_filter::is_textual_content_type(&content_type)
         || has_non_identity_response_encoding(&headers)
     {
         return build_response(status, &headers, Body::from(body_bytes), request_id);
@@ -391,24 +389,46 @@ pub(crate) async fn build_upstream_response(
     };
 
     if json_filter::should_skip_text_rewrite(&text) {
-        return build_response(status, &headers, Body::from(text), request_id);
+        let mut response = build_response(status, &headers, Body::from(text), request_id)?;
+        if !skip_rehydration {
+            insert_leaked_entities_header(&mut response, 0)?;
+        }
+        return Ok(response);
     }
 
-    let rehydrated = Rehydrator::rehydrate_from_mappings(&text, &mappings).map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to rehydrate upstream response: {error}"),
-        )
-    })?;
+    let (redacted_text, leaked_count) = if skip_rehydration {
+        (text, 0usize)
+    } else {
+        redact_response_leaks(state, &content_type, &text, &mappings).await?
+    };
 
-    if rehydrated.rehydrated_count > 0 {
-        let _ = state.audit.log_rehydrate(
-            AuditContext::new("proxy", request_id).with_session(session_id),
-            rehydrated.rehydrated_count,
-        );
+    let final_text = if skip_rehydration || mappings.is_empty() {
+        redacted_text
+    } else {
+        let rehydrated =
+            Rehydrator::rehydrate_from_mappings(&redacted_text, &mappings).map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to rehydrate upstream response: {error}"),
+                )
+            })?;
+
+        if rehydrated.rehydrated_count > 0 {
+            let _ = state.audit.log_rehydrate(
+                AuditContext::new("proxy", request_id).with_session(session_id),
+                rehydrated.rehydrated_count,
+            );
+        }
+
+        rehydrated.text
+    };
+
+    let mut response = build_response(status, &headers, Body::from(final_text), request_id)?;
+    if !skip_rehydration {
+        insert_leaked_entities_header(&mut response, leaked_count)?;
     }
 
-    build_response(status, &headers, Body::from(rehydrated.text), request_id)
+    Ok(response)
 }
 
 fn build_response(
@@ -478,16 +498,62 @@ fn pseudonymize_text(
         return Ok(None);
     }
 
-    let entities = detect_sorted_entities(detector, text)?;
-    if entities.is_empty() {
+    if let Some(session_id) = session_id {
+        state.sessions.with_session(session_id, |ctx| {
+            let _ = ctx.check_sensitivity(text);
+        });
+    }
+
+    let mut entity_entries: Vec<(DetectedEntity, Option<PseudoToken>)> =
+        detect_sorted_entities(detector, text)?
+            .into_iter()
+            .map(|entity| (entity, None))
+            .collect();
+
+    if let Some(session_id) = session_id {
+        if let Some(coref_results) = state
+            .sessions
+            .with_session_ref(session_id, |ctx| ctx.resolve_coreferences(text))
+        {
+            for (coref_entity, coref_token) in coref_results {
+                let overlaps = entity_entries.iter().any(|(entity, _)| {
+                    coref_entity.start < entity.end && coref_entity.end > entity.start
+                });
+                if !overlaps {
+                    entity_entries.push((coref_entity, Some(coref_token)));
+                }
+            }
+        }
+    }
+
+    if entity_entries.is_empty() {
         return Ok(None);
     }
 
-    let result = Replacer::pseudonymize_with_strategy(text, &entities, vault, strategy)?;
-    let tokens = entities
-        .iter()
-        .map(|entity| token_for_strategy(vault, &entity.original, &entity.category, strategy))
-        .collect::<Vec<_>>();
+    entity_entries.sort_by_key(|(entity, _)| entity.start);
+
+    let mut pseudonymized = String::with_capacity(text.len());
+    let mut entities = Vec::with_capacity(entity_entries.len());
+    let mut tokens = Vec::with_capacity(entity_entries.len());
+    let mut last_end = 0usize;
+
+    for (entity, override_token) in entity_entries {
+        if entity.start > last_end {
+            pseudonymized.push_str(&text[last_end..entity.start]);
+        }
+
+        let token = override_token.unwrap_or_else(|| {
+            token_for_strategy(vault, &entity.original, &entity.category, strategy)
+        });
+        pseudonymized.push_str(&token.token);
+        last_end = entity.end;
+        entities.push(entity);
+        tokens.push(token);
+    }
+
+    if last_end < text.len() {
+        pseudonymized.push_str(&text[last_end..]);
+    }
 
     if let Some(session_id) = session_id {
         state.sessions.with_session(session_id, |ctx| {
@@ -496,11 +562,125 @@ fn pseudonymize_text(
     }
 
     Ok(Some(TextMutation {
-        text: result.text,
+        text: pseudonymized,
         entities: entities.clone(),
         categories: entity_categories(&entities),
         tokens,
     }))
+}
+
+async fn redact_response_leaks(
+    state: &AppState,
+    content_type: &str,
+    text: &str,
+    mappings: &HashMap<String, String>,
+) -> Result<(String, usize), (StatusCode, String)> {
+    let detector = state.detector.read().await;
+    let expected_values = mappings.keys().map(String::as_str).collect::<HashSet<_>>();
+
+    if json_filter::is_json_content_type(content_type) {
+        if let Ok(mut json) = serde_json::from_str::<Value>(text) {
+            let mut leaked_count = 0usize;
+            let changed = json_filter::mutate_json_text(&mut json, &mut |segment| {
+                let redaction = redact_unexpected_entities(&detector, segment, &expected_values)?;
+                leaked_count += redaction.redacted_count;
+                Ok(redaction.text)
+            })
+            .map_err(|error| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed to inspect upstream JSON response: {error}"),
+                )
+            })?;
+
+            if changed == 0 {
+                return Ok((text.to_string(), leaked_count));
+            }
+
+            let updated = serde_json::to_string(&json).map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to serialize redacted upstream response: {error}"),
+                )
+            })?;
+
+            return Ok((updated, leaked_count));
+        }
+    }
+
+    let redaction =
+        redact_unexpected_entities(&detector, text, &expected_values).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to inspect upstream response: {error}"),
+            )
+        })?;
+
+    Ok((
+        redaction.text.unwrap_or_else(|| text.to_string()),
+        redaction.redacted_count,
+    ))
+}
+
+struct RedactionResult {
+    text: Option<String>,
+    redacted_count: usize,
+}
+
+fn redact_unexpected_entities(
+    detector: &Detector,
+    text: &str,
+    expected_values: &HashSet<&str>,
+) -> anyhow::Result<RedactionResult> {
+    if json_filter::should_skip_text_rewrite(text) {
+        return Ok(RedactionResult {
+            text: None,
+            redacted_count: 0,
+        });
+    }
+
+    let mut entities = detect_sorted_entities(detector, text)?;
+    entities.retain(|entity| !expected_values.contains(entity.original.as_str()));
+
+    if entities.is_empty() {
+        return Ok(RedactionResult {
+            text: None,
+            redacted_count: 0,
+        });
+    }
+
+    tracing::warn!(
+        leaked = entities.len(),
+        "PII leakage detected in upstream response — redacting"
+    );
+
+    entities.sort_by_key(|entity| std::cmp::Reverse(entity.start));
+    let mut redacted = text.to_string();
+    for entity in &entities {
+        redacted.replace_range(entity.start..entity.end, "[REDACTED]");
+    }
+
+    Ok(RedactionResult {
+        text: Some(redacted),
+        redacted_count: entities.len(),
+    })
+}
+
+fn insert_leaked_entities_header(
+    response: &mut Response,
+    leaked_count: usize,
+) -> Result<(), (StatusCode, String)> {
+    let header_value =
+        axum::http::HeaderValue::from_str(&leaked_count.to_string()).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to encode leaked entities header: {error}"),
+            )
+        })?;
+    response
+        .headers_mut()
+        .insert("X-CloakPipe-Leaked-Entities", header_value);
+    Ok(())
 }
 
 fn detect_sorted_entities(

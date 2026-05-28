@@ -16,8 +16,8 @@ fn test_ner_status_json_reports_missing_distilbert_and_download_hint() {
         .output()
         .expect("failed to run cloakpipe ner status --json");
 
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("ner status --json should emit valid JSON");
+    let body: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ner status --json should emit valid JSON");
 
     assert!(
         output.status.success(),
@@ -30,14 +30,20 @@ fn test_ner_status_json_reports_missing_distilbert_and_download_hint() {
         .map(|model| model["backend"].as_str().unwrap())
         .collect();
 
-    assert_eq!(backends, vec!["distilbert_pii", "gliner_pii", "bert", "gliner"]);
+    assert_eq!(
+        backends,
+        vec!["distilbert_pii", "gliner_pii", "bert", "gliner"]
+    );
     assert_eq!(body["models"][0]["backend"], "distilbert_pii");
     assert_eq!(
         body["models"][0]["name"],
         "DistilBERT-PII NER (63MB ONNX, 33 entity types, runs on any CPU)"
     );
     assert_eq!(body["models"][0]["status"], "missing");
-    assert_eq!(body["models"][0]["download_command"], "cloakpipe ner download");
+    assert_eq!(
+        body["models"][0]["download_command"],
+        "cloakpipe ner download"
+    );
     assert_eq!(body["models"][1]["backend"], "gliner_pii");
     assert_eq!(
         body["models"][1]["download_command"],
@@ -70,8 +76,14 @@ fn test_ner_status_reports_missing_distilbert_and_download_hint() {
         stdout.contains("GLiNER-PII sidecar (managed Python runtime for custom entity types)"),
         "stdout was: {stdout}"
     );
-    assert!(stdout.contains("BERT NER (legacy 4-type ONNX model)"), "stdout was: {stdout}");
-    assert!(stdout.contains("GLiNER2 (legacy zero-shot ONNX model)"), "stdout was: {stdout}");
+    assert!(
+        stdout.contains("BERT NER (legacy 4-type ONNX model)"),
+        "stdout was: {stdout}"
+    );
+    assert!(
+        stdout.contains("GLiNER2 (legacy zero-shot ONNX model)"),
+        "stdout was: {stdout}"
+    );
     assert!(stdout.contains("status: missing"), "stdout was: {stdout}");
     assert!(
         stdout.contains("download: cloakpipe ner download"),
@@ -99,7 +111,10 @@ fn test_ner_status_reports_incomplete_distilbert_download() {
         "ner status should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("status: incomplete"), "stdout was: {stdout}");
+    assert!(
+        stdout.contains("status: incomplete"),
+        "stdout was: {stdout}"
+    );
     assert!(
         stdout.contains("download: cloakpipe ner download"),
         "stdout was: {stdout}"
@@ -135,8 +150,8 @@ fn test_ner_status_json_lists_all_available_models() {
         .output()
         .expect("failed to run cloakpipe ner status --json with downloaded models");
 
-    let body: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("ner status --json should emit valid JSON");
+    let body: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ner status --json should emit valid JSON");
     let models = body["models"].as_array().unwrap();
     let backends: Vec<&str> = models
         .iter()
@@ -148,7 +163,10 @@ fn test_ner_status_json_lists_all_available_models() {
         "ner status --json should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(backends, vec!["distilbert_pii", "gliner_pii", "bert", "gliner"]);
+    assert_eq!(
+        backends,
+        vec!["distilbert_pii", "gliner_pii", "bert", "gliner"]
+    );
     assert_eq!(models[0]["status"], "installed");
     assert_eq!(models[1]["status"], "installed");
     assert_eq!(models[0]["download_command"], serde_json::Value::Null);
@@ -205,7 +223,10 @@ fn test_ner_status_lists_all_available_models() {
         stdout.contains("GLiNER2 (legacy zero-shot ONNX model)"),
         "stdout was: {stdout}"
     );
-    assert!(!stdout.contains("download: cloakpipe ner download"), "stdout was: {stdout}");
+    assert!(
+        !stdout.contains("download: cloakpipe ner download"),
+        "stdout was: {stdout}"
+    );
 }
 
 fn venv_python_path() -> &'static str {

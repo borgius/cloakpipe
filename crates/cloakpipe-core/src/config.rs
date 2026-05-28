@@ -55,10 +55,8 @@ pub struct ProxyConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum ProxyMode {
     #[default]
-    #[serde(alias = "cloaktree")]
-    Proxy,
-    #[serde(alias = "llm_http")]
-    LlmHttp,
+    #[serde(alias = "llm-http", alias = "llm_http", alias = "llm_proxy")]
+    LlmProxy,
     #[serde(alias = "http_proxy")]
     HttpProxy,
 }
@@ -278,7 +276,7 @@ fn default_max_concurrent() -> usize {
     256
 }
 fn default_mode() -> ProxyMode {
-    ProxyMode::Proxy
+    ProxyMode::LlmProxy
 }
 fn default_auth_mode() -> ProxyAuthMode {
     ProxyAuthMode::PassThrough
@@ -402,33 +400,40 @@ mod tests {
     }
 
     #[test]
-    fn proxy_mode_defaults_to_proxy() {
-        assert!(matches!(super::default_mode(), ProxyMode::Proxy));
+    fn proxy_mode_defaults_to_llm_proxy() {
+        assert!(matches!(super::default_mode(), ProxyMode::LlmProxy));
     }
 
     #[test]
-    fn proxy_mode_serializes_documented_llm_http_name() {
+    fn proxy_mode_serializes_documented_llm_proxy_name() {
         assert_eq!(
             toml::to_string(&ProxyModeDoc {
-                mode: ProxyMode::LlmHttp,
+                mode: ProxyMode::LlmProxy,
             })
             .unwrap(),
-            "mode = \"llm-http\"\n"
+            "mode = \"llm-proxy\"\n"
         );
     }
 
     #[test]
-    fn proxy_mode_accepts_snake_case_alias() {
+    fn proxy_mode_accepts_legacy_llm_http_snake_case_alias() {
         let doc: ProxyModeDoc = toml::from_str("mode = \"llm_http\"").unwrap();
 
-        assert!(matches!(doc.mode, ProxyMode::LlmHttp));
+        assert!(matches!(doc.mode, ProxyMode::LlmProxy));
     }
 
     #[test]
-    fn proxy_mode_accepts_legacy_cloaktree_alias() {
-        let doc: ProxyModeDoc = toml::from_str("mode = \"cloaktree\"").unwrap();
+    fn proxy_mode_accepts_legacy_llm_http_kebab_case_alias() {
+        let doc: ProxyModeDoc = toml::from_str("mode = \"llm-http\"").unwrap();
 
-        assert!(matches!(doc.mode, ProxyMode::Proxy));
+        assert!(matches!(doc.mode, ProxyMode::LlmProxy));
+    }
+
+    #[test]
+    fn proxy_mode_rejects_removed_proxy_mode() {
+        let result = toml::from_str::<ProxyModeDoc>("mode = \"proxy\"");
+
+        assert!(result.is_err());
     }
 
     #[test]

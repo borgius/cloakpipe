@@ -20,7 +20,7 @@ Rust-native · <5ms latency · 33+ entity types · 91.7% real-world protection �
 
 CloakPipe is a **high-performance privacy proxy** that sits between your application and supported LLM APIs. It detects PII (personally identifiable information) in your prompts, replaces it with safe tokens, forwards the sanitized request to the LLM, and restores the original values in the response.
 
-Today CloakPipe has three server modes: the preexisting `proxy` mode for fixed OpenAI-compatible routes, `llm-http` for raw multi-provider HTTP traffic, and `http-proxy` for explicit `HTTP_PROXY`/`HTTPS_PROXY` forward-proxy usage.
+Today CloakPipe has two server modes: `llm-proxy` for clients that point at CloakPipe directly, and `http-proxy` for explicit `HTTP_PROXY`/`HTTPS_PROXY` forward-proxy usage.
 
 **The LLM never sees your real data. Your users see natural responses.**
 
@@ -66,47 +66,21 @@ The installer initializes a global CloakPipe home at `~/.cloakpipe` without over
 
 ### Choose a proxy mode
 
-CloakPipe currently has three server modes.
+CloakPipe currently has two server modes.
 
 | Mode | Best for | What the client changes | Upstream auth |
 |---|---|---|---|
-| `proxy` | One fixed OpenAI-compatible upstream | Point the SDK or app at CloakPipe, usually `http://localhost:<port>/v1` | CloakPipe sends the server-side key from `proxy.api_key_env` |
-| `llm-http` | Raw HTTP routing for OpenAI-compatible paths and Anthropic native paths | Point the client at CloakPipe paths such as `/v1/...`, `/chat/...`, or `/anthropic/...` | `pass-through` by default; the client usually sends the real provider key |
-| `http-proxy` | Apps that support `HTTP_PROXY` or `HTTPS_PROXY` | Keep the SDK/app pointed at the real provider and set proxy environment variables | `pass-through` by default; the client sends the real provider key |
+| `llm-proxy` | Apps and SDKs that can point at CloakPipe directly | Point the SDK or app at CloakPipe paths such as `http://localhost:<port>/v1` or `/anthropic` | `pass-through` by default; set `auth_mode = "server-key"` to make CloakPipe inject `proxy.api_key_env` |
+| `http-proxy` | Apps that support `HTTP_PROXY` or `HTTPS_PROXY` | Keep the SDK/app pointed at the real provider and set proxy environment variables | `pass-through` by default; set `auth_mode = "server-key"` when a bearer-token upstream should come from CloakPipe |
 
-Three important points:
+Two important points:
 
-- `proxy` is the preexisting mode.
-- `llm-http` is broader, but it still expects the client to talk to CloakPipe.
+- `llm-proxy` replaces the removed `proxy` mode. If you used the old single-upstream OpenAI-compatible setup, keep the same base-URL override and set `auth_mode = "server-key"`.
 - `http-proxy` is the transparent network-proxy mode. Plain HTTP traffic can be inspected and mutated. HTTPS traffic uses CONNECT; by default it is tunneled unchanged, and opt-in HTTPS inspection is available for known or allowlisted LLM hosts after you install a local CloakPipe CA.
 
-#### Mode 1: `proxy` (preexisting)
+#### Mode 1: `llm-proxy`
 
-Use `proxy` when all LLM traffic goes to one OpenAI-compatible upstream and you are happy to override the client base URL.
-
-Example config:
-
-```toml
-[proxy]
-listen = "127.0.0.1:8900"
-upstream = "https://api.openai.com"
-api_key_env = "OPENAI_API_KEY"
-mode = "proxy"
-masking_strategy = "similar"
-```
-
-How to use it:
-
-1. Start CloakPipe with that config.
-2. Point your SDK or app at CloakPipe, usually `http://127.0.0.1:8900/v1`.
-3. Put the real upstream provider key on the CloakPipe server in the environment variable named by `proxy.api_key_env`.
-4. Send normal OpenAI-compatible `/v1/chat/completions` or `/v1/embeddings` requests.
-
-In this mode, CloakPipe uses the server-side provider key. For SDKs that insist on an API key even when talking to CloakPipe, any non-empty placeholder usually works.
-
-#### Mode 2: `llm-http` (new)
-
-Use `llm-http` when you want the raw multi-provider HTTP handler, pass-through auth, or Anthropic-native paths in addition to OpenAI-compatible routes.
+Use `llm-proxy` when your client can point at CloakPipe. It covers the old `proxy` mode and adds multi-provider raw HTTP routing.
 
 Example config:
 
@@ -114,7 +88,7 @@ Example config:
 [proxy]
 listen = "127.0.0.1:8900"
 upstream = "https://api.openai.com"
-mode = "llm-http"
+mode = "llm-proxy"
 masking_strategy = "similar"
 auth_mode = "pass-through"
 dry_run = false
@@ -125,18 +99,32 @@ anthropic = "https://api.anthropic.com"
 
 How to use it:
 
-1. Start CloakPipe with `mode = "llm-http"`.
+1. Start CloakPipe with `mode = "llm-proxy"`.
 2. Point the client at CloakPipe, not at the real provider.
-3. For OpenAI-compatible clients, use CloakPipe as the base URL. `llm-http` accepts both `/v1/...` and `/chat/...` style paths.
+3. For OpenAI-compatible clients, use CloakPipe as the base URL. `llm-proxy` accepts both `/v1/...` and `/chat/...` style paths.
 4. For Anthropic clients, use `http://127.0.0.1:8900/anthropic` as the base URL so the SDK's `/v1/messages` request becomes `/anthropic/v1/messages` at CloakPipe.
-5. Send the real provider auth header from the client. In `llm-http`, `auth_mode = "pass-through"` is the default and recommended setting.
+5. Send the real provider auth header from the client. `auth_mode = "pass-through"` is the default and recommended setting.
 
-What `llm-http` does **not** do yet:
+To replace the removed `proxy` mode, use the same single upstream and switch auth to server-side injection:
+
+```toml
+[proxy]
+listen = "127.0.0.1:8900"
+upstream = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+mode = "llm-proxy"
+auth_mode = "server-key"
+masking_strategy = "similar"
+```
+
+In that setup, CloakPipe injects the provider key from `proxy.api_key_env`. For SDKs that insist on an API key even when talking to CloakPipe, any non-empty placeholder usually works.
+
+What `llm-proxy` does **not** do yet:
 
 - It does not work as a transparent network proxy via `HTTP_PROXY` or `HTTPS_PROXY`.
 - It does not accept arbitrary provider prefixes today. The built-in routing currently covers OpenAI-compatible paths and Anthropic-prefixed traffic.
 
-#### Mode 3: `http-proxy` (transparent forward proxy)
+#### Mode 2: `http-proxy` (transparent forward proxy)
 
 Use `http-proxy` when you do **not** want to change application code or SDK base URLs. Your app stays pointed at the real provider, and you configure standard proxy environment variables instead.
 
@@ -395,7 +383,7 @@ from openai import OpenAI
 
 # Just change the base URL. That's it.
 client = OpenAI(
-    base_url="http://localhost:3100/v1",  # proxy mode, or llm-http when your SDK uses /v1 paths
+    base_url="http://localhost:3100/v1",  # llm-proxy mode for OpenAI-compatible paths
     api_key="sk-your-openai-key"          # Your real API key
 )
 
@@ -418,7 +406,7 @@ from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
     model="gpt-4",
-    openai_api_base="http://localhost:3100/v1",  # proxy mode, or llm-http with /v1-style clients
+    openai_api_base="http://localhost:3100/v1",  # llm-proxy mode for OpenAI-compatible paths
     openai_api_key="sk-your-key"
 )
 
@@ -427,13 +415,13 @@ response = llm.invoke("Summarize patient records for Aadhaar 2345 6789 0123")
 
 ### Anthropic SDK
 
-This example requires `proxy.mode = "llm-http"`.
+This example requires `proxy.mode = "llm-proxy"`.
 
 ```python
 from anthropic import Anthropic
 
 client = Anthropic(
-    base_url="http://localhost:3100/anthropic",  # llm-http mode on CloakPipe
+    base_url="http://localhost:3100/anthropic",  # llm-proxy mode on CloakPipe
     api_key="sk-ant-your-key"
 )
 
@@ -467,7 +455,7 @@ import { generateText } from 'ai';
 
 const result = await generateText({
   model: openai('gpt-4', {
-    baseURL: 'http://localhost:3100/v1',  // proxy mode, or llm-http with /v1-style clients
+    baseURL: 'http://localhost:3100/v1',  // llm-proxy mode for OpenAI-compatible paths
   }),
   prompt: 'Analyze the customer data for Rajesh, Aadhaar 2345 6789 0123',
 });

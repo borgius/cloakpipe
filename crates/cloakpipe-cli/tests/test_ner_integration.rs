@@ -202,7 +202,7 @@ upstream = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 timeout_seconds = 120
 max_concurrent = 256
-mode = "proxy"
+mode = "llm-proxy"
 masking_strategy = "token"
 
 [vault]

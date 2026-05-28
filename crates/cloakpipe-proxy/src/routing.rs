@@ -1,4 +1,4 @@
-//! Provider route resolution for opt-in raw llm-http proxying.
+//! Provider route resolution for opt-in raw LLM proxying.
 
 use cloakpipe_core::config::ProxyConfig;
 
@@ -113,7 +113,7 @@ mod tests {
             api_key_env: "OPENAI_API_KEY".into(),
             timeout_seconds: 120,
             max_concurrent: 256,
-            mode: ProxyMode::LlmHttp,
+            mode: ProxyMode::LlmProxy,
             dry_run: false,
             bypass: Vec::new(),
             auth_mode: ProxyAuthMode::PassThrough,

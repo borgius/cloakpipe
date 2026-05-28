@@ -33,10 +33,10 @@ fn test_config(audit_dir: &str) -> CloakPipeConfig {
             api_key_env: "OPENAI_API_KEY".into(),
             timeout_seconds: 120,
             max_concurrent: 256,
-            mode: ProxyMode::Proxy,
+            mode: ProxyMode::LlmProxy,
             dry_run: false,
             bypass: Vec::new(),
-            auth_mode: ProxyAuthMode::PassThrough,
+            auth_mode: ProxyAuthMode::ServerKey,
             provider_routes: std::collections::HashMap::new(),
             http_proxy: Default::default(),
             masking_strategy: MaskingStrategy::Token,
@@ -101,8 +101,16 @@ fn test_state_with_api_key(api_key: Option<&str>) -> std::sync::Arc<AppState> {
 
 #[derive(Clone)]
 enum MockBehavior {
-    EchoBody { content_type: &'static str },
-    StreamEchoBody { content_type: &'static str },
+    EchoBody {
+        content_type: &'static str,
+    },
+    StreamEchoBody {
+        content_type: &'static str,
+    },
+    StaticBody {
+        content_type: &'static str,
+        body: &'static str,
+    },
 }
 
 #[derive(Debug)]
@@ -163,6 +171,11 @@ async fn mock_upstream_handler(
                 .body(Body::from_stream(stream))
                 .unwrap()
         }
+        MockBehavior::StaticBody { content_type, body } => Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", content_type)
+            .body(Body::from(body.to_string()))
+            .unwrap(),
     }
 }
 
@@ -193,14 +206,14 @@ async fn spawn_mock_upstream(
     (format!("http://{}", address), capture_rx, handle)
 }
 
-fn llm_http_test_state(
+fn llm_proxy_test_state(
     upstream: &str,
     dry_run: bool,
     bypass: Vec<String>,
     auth_mode: ProxyAuthMode,
 ) -> std::sync::Arc<AppState> {
     let audit_dir = std::env::temp_dir()
-        .join(format!("cloakpipe-proxy-llm-http-test-{}", Uuid::new_v4()))
+        .join(format!("cloakpipe-proxy-llm-proxy-test-{}", Uuid::new_v4()))
         .to_string_lossy()
         .to_string();
 
@@ -211,7 +224,7 @@ fn llm_http_test_state(
             api_key_env: "OPENAI_API_KEY".into(),
             timeout_seconds: 120,
             max_concurrent: 256,
-            mode: ProxyMode::LlmHttp,
+            mode: ProxyMode::LlmProxy,
             dry_run,
             bypass,
             auth_mode,
@@ -612,12 +625,12 @@ async fn test_upstream_backed_tree_routes_return_service_unavailable_without_ups
 }
 
 #[tokio::test]
-async fn test_llm_http_routes_openai_requests_and_mutates_only_content_fields() {
+async fn test_llm_proxy_routes_openai_requests_and_mutates_only_content_fields() {
     let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
         content_type: "application/json",
     })
     .await;
-    let state = llm_http_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
     let app = build_router(state);
 
     let request_body = serde_json::json!({
@@ -633,7 +646,7 @@ async fn test_llm_http_routes_openai_requests_and_mutates_only_content_fields() 
         }
     });
 
-    let (status, _, response_body) = raw_response(
+    let (status, response_headers, response_body) = raw_response(
         app,
         Method::POST,
         "/chat/completions",
@@ -668,15 +681,127 @@ async fn test_llm_http_routes_openai_requests_and_mutates_only_content_fields() 
 
     let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
     assert!(response_json.to_string().contains("alice@example.com"));
+    assert_eq!(
+        response_headers.get("x-cloakpipe-leaked-entities").unwrap(),
+        "0"
+    );
 }
 
 #[tokio::test]
-async fn test_llm_http_routes_anthropic_prefix_and_forwards_pass_through_auth() {
+async fn test_llm_proxy_redacts_unexpected_pii_in_json_responses() {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::StaticBody {
+        content_type: "application/json",
+        body: r#"{"choices":[{"message":{"content":"Contact leaked@example.com immediately."}}]}"#,
+    })
+    .await;
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+    let app = build_router(state);
+
+    let (status, response_headers, response_body) = raw_response(
+        app,
+        Method::POST,
+        "/v1/chat/completions",
+        "application/json",
+        &[("authorization", "Bearer caller-token")],
+        Body::from(
+            serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let _captured = captured_rx.recv().await.unwrap();
+    server_handle.abort();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        response_headers.get("x-cloakpipe-leaked-entities").unwrap(),
+        "1"
+    );
+
+    let response_json: serde_json::Value = serde_json::from_slice(&response_body).unwrap();
+    assert_eq!(
+        response_json["choices"][0]["message"]["content"],
+        "Contact [REDACTED] immediately."
+    );
+}
+
+#[tokio::test]
+async fn test_llm_proxy_reuses_session_coreference_tokens() {
     let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
         content_type: "application/json",
     })
     .await;
-    let state = llm_http_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+
+    let app = build_router(state.clone());
+    let (first_status, _, _) = raw_response(
+        app,
+        Method::POST,
+        "/v1/chat/completions",
+        "application/json",
+        &[
+            ("authorization", "Bearer caller-token"),
+            ("x-session-id", "session-coref"),
+        ],
+        Body::from(
+            serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "$500 approved the request."}]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let app = build_router(state);
+    let (second_status, _, _) = raw_response(
+        app,
+        Method::POST,
+        "/v1/chat/completions",
+        "application/json",
+        &[
+            ("authorization", "Bearer caller-token"),
+            ("x-session-id", "session-coref"),
+        ],
+        Body::from(
+            serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "the amount approved the request."}]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let first_captured = captured_rx.recv().await.unwrap();
+    let second_captured = captured_rx.recv().await.unwrap();
+    server_handle.abort();
+
+    assert_eq!(first_status, StatusCode::OK);
+    assert_eq!(second_status, StatusCode::OK);
+
+    let first_json: serde_json::Value = serde_json::from_slice(&first_captured.body).unwrap();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_captured.body).unwrap();
+
+    let first_content = first_json["messages"][0]["content"].as_str().unwrap();
+    let second_content = second_json["messages"][0]["content"].as_str().unwrap();
+
+    assert_ne!(first_content, "$500 approved the request.");
+    assert_eq!(first_content, second_content);
+    assert!(!second_content.contains("the amount approved the request."));
+}
+
+#[tokio::test]
+async fn test_llm_proxy_routes_anthropic_prefix_and_forwards_pass_through_auth() {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+        content_type: "application/json",
+    })
+    .await;
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
     let app = build_router(state);
 
     let request_body = serde_json::json!({
@@ -724,12 +849,12 @@ async fn test_llm_http_routes_anthropic_prefix_and_forwards_pass_through_auth() 
 }
 
 #[tokio::test]
-async fn test_llm_http_dry_run_forwards_original_body() {
+async fn test_llm_proxy_dry_run_forwards_original_body() {
     let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
         content_type: "text/plain",
     })
     .await;
-    let state = llm_http_test_state(&upstream, true, Vec::new(), ProxyAuthMode::PassThrough);
+    let state = llm_proxy_test_state(&upstream, true, Vec::new(), ProxyAuthMode::PassThrough);
     let app = build_router(state);
 
     let (status, _, response_body) = raw_response(
@@ -757,12 +882,12 @@ async fn test_llm_http_dry_run_forwards_original_body() {
 }
 
 #[tokio::test]
-async fn test_llm_http_bypass_forwards_original_body_and_skips_rehydration() {
+async fn test_llm_proxy_bypass_forwards_original_body_and_skips_rehydration() {
     let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
         content_type: "text/plain",
     })
     .await;
-    let state = llm_http_test_state(
+    let state = llm_proxy_test_state(
         &upstream,
         false,
         vec!["127.0.0.1".to_string()],
@@ -795,12 +920,12 @@ async fn test_llm_http_bypass_forwards_original_body_and_skips_rehydration() {
 }
 
 #[tokio::test]
-async fn test_llm_http_rehydrates_full_text_responses() {
+async fn test_llm_proxy_rehydrates_full_text_responses() {
     let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
         content_type: "text/plain",
     })
     .await;
-    let state = llm_http_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
     let app = build_router(state);
 
     let (status, response_headers, response_body) = raw_response(
@@ -827,13 +952,13 @@ async fn test_llm_http_rehydrates_full_text_responses() {
 }
 
 #[tokio::test]
-async fn test_llm_http_restores_streamed_fake_across_chunk_boundary() {
+async fn test_llm_proxy_restores_streamed_fake_across_chunk_boundary() {
     let (upstream, mut captured_rx, server_handle) =
         spawn_mock_upstream(MockBehavior::StreamEchoBody {
             content_type: "text/event-stream",
         })
         .await;
-    let state = llm_http_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
     let app = build_router(state);
 
     let (status, _, response_body) = raw_response(

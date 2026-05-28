@@ -1,4 +1,4 @@
-//! Conservative JSON filtering for generic llm-http request mutation.
+//! Conservative JSON filtering for generic llm-proxy request mutation.
 
 use anyhow::Result;
 use serde_json::{Map, Value};

@@ -90,7 +90,7 @@ impl AppState {
         format!("Set {} with your API key", self.config.proxy.api_key_env)
     }
 
-    /// Return whether llm-http mode should forward caller credentials directly.
+    /// Return whether LLM proxy mode should forward caller credentials directly.
     pub fn use_passthrough_auth(&self) -> bool {
         matches!(self.config.proxy.auth_mode, ProxyAuthMode::PassThrough)
     }

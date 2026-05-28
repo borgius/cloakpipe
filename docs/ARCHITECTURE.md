@@ -388,10 +388,9 @@ New in v2: **OS keyring integration** via `keyring` crate (macOS Keychain, Linux
 
 ### 7. Proxy Server (`cloakpipe-proxy`)
 
-The proxy layer has three server modes:
+The proxy layer has two server modes:
 
-- `proxy`: fixed OpenAI-compatible routes. Clients point at CloakPipe; CloakPipe supplies the server-side provider key.
-- `llm-http`: raw multi-provider HTTP routing. Clients still point at CloakPipe, but provider auth is usually passed through.
+- `llm-proxy`: raw multi-provider HTTP routing for clients that point at CloakPipe directly. Provider auth is usually passed through, but `auth_mode = "server-key"` replaces the removed legacy `proxy` behavior.
 - `http-proxy`: explicit forward proxy for apps configured with `HTTP_PROXY` or `HTTPS_PROXY`. Apps keep their real provider URLs.
 
 `http-proxy` uses raw Hyper HTTP/1 with upgrades so authority-form `CONNECT host:port` requests are handled before Axum routing normalizes them.

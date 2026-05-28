@@ -7,7 +7,7 @@
 //! leaf certificate, mutates the decrypted HTTP/1.1 request, and re-encrypts the
 //! response to the client.
 
-use crate::{llm_http, outbound_proxy, state::AppState, tls_mitm};
+use crate::{llm_proxy, outbound_proxy, state::AppState, tls_mitm};
 use axum::{
     body::Body,
     extract::State,
@@ -115,9 +115,9 @@ async fn handle_plain_http(
         })?
         .to_bytes();
 
-    let session_id = llm_http::extract_session_id(&state, &parts.headers);
+    let session_id = llm_proxy::extract_session_id(&state, &parts.headers);
     let should_bypass = state.should_bypass_upstream(&target_url) || !inspect_host;
-    let prepared = llm_http::prepare_request_body(
+    let prepared = llm_proxy::prepare_request_body(
         &state,
         &parts.headers,
         &body_bytes,
@@ -144,7 +144,7 @@ async fn handle_plain_http(
             )
         })?;
 
-    let request_builder = llm_http::build_upstream_request(
+    let request_builder = llm_proxy::build_upstream_request(
         &state,
         method,
         &target_url,
@@ -164,7 +164,7 @@ async fn handle_plain_http(
     })?;
 
     let skip_rehydration = should_bypass || state.config.proxy.dry_run;
-    llm_http::build_upstream_response(
+    llm_proxy::build_upstream_response(
         &state,
         upstream_response,
         skip_rehydration,
@@ -342,9 +342,9 @@ async fn handle_mitm_http_request(
         })?
         .to_bytes();
 
-    let session_id = llm_http::extract_session_id(&state, &parts.headers);
+    let session_id = llm_proxy::extract_session_id(&state, &parts.headers);
     let should_bypass = state.should_bypass_upstream(&target_url);
-    let prepared = llm_http::prepare_request_body(
+    let prepared = llm_proxy::prepare_request_body(
         &state,
         &parts.headers,
         &body_bytes,
@@ -371,7 +371,7 @@ async fn handle_mitm_http_request(
             )
         })?;
 
-    let request_builder = llm_http::build_upstream_request(
+    let request_builder = llm_proxy::build_upstream_request(
         &state,
         method,
         &target_url,
@@ -391,7 +391,7 @@ async fn handle_mitm_http_request(
     })?;
 
     let skip_rehydration = should_bypass || state.config.proxy.dry_run;
-    llm_http::build_upstream_response(
+    llm_proxy::build_upstream_response(
         &state,
         upstream_response,
         skip_rehydration,

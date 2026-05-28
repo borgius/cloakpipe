@@ -146,7 +146,7 @@ pub fn rehydrate_text_stream(
         }
 
         if !leftover.is_empty() {
-            tracing::debug!(request_id = %request_id, "Flushing remaining llm-http stream buffer");
+            tracing::debug!(request_id = %request_id, "Flushing remaining llm-proxy stream buffer");
             let flushed = if skip_rehydration || mappings.is_empty() || json_filter::should_skip_text_rewrite(&leftover) {
                 leftover
             } else {
