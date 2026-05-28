@@ -190,7 +190,11 @@ cloakpipe/
 │   │   └── search.rs               # Encrypted similarity search helpers
 │   │
 │   ├── cloakpipe-proxy/            # HTTP proxy layer
-│   │   ├── server.rs               # axum-based OpenAI-compatible proxy
+│   │   ├── server.rs               # axum/hyper server and mode dispatch
+│   │   ├── llm_http.rs             # raw multi-provider HTTP proxy pipeline
+│   │   ├── http_proxy.rs           # explicit HTTP_PROXY/HTTPS_PROXY forward proxy
+│   │   ├── outbound_proxy.rs       # optional corporate proxy egress chaining
+│   │   ├── tls_mitm.rs             # local CA and dynamic host certificates
 │   │   ├── streaming.rs            # SSE chunk-level rehydration
 │   │   ├── middleware.rs           # Request/response interception
 │   │   ├── embeddings.rs          # /v1/embeddings specific handling
@@ -384,11 +388,39 @@ New in v2: **OS keyring integration** via `keyring` crate (macOS Keychain, Linux
 
 ### 7. Proxy Server (`cloakpipe-proxy`)
 
-Unchanged core from v1 (axum + tokio). New additions:
+The proxy layer has three server modes:
 
-- `embeddings.rs`: Dedicated handler for `/v1/embeddings` with ADCPE encryption hook
-- Mode routing: proxy checks `mode` config to dispatch to CloakTree or CloakVector pipeline
-- Tree endpoints: `POST /v1/tree/build`, `POST /v1/tree/search` (CloakTree-specific)
+- `proxy`: fixed OpenAI-compatible routes. Clients point at CloakPipe; CloakPipe supplies the server-side provider key.
+- `llm-http`: raw multi-provider HTTP routing. Clients still point at CloakPipe, but provider auth is usually passed through.
+- `http-proxy`: explicit forward proxy for apps configured with `HTTP_PROXY` or `HTTPS_PROXY`. Apps keep their real provider URLs.
+
+`http-proxy` uses raw Hyper HTTP/1 with upgrades so authority-form `CONNECT host:port` requests are handled before Axum routing normalizes them.
+
+HTTP-proxy state machine:
+
+```
+Inbound request
+  ├─ origin/absolute-form http://...
+  │    └─ collect body → mask textual content → reqwest upstream → rehydrate response
+  └─ CONNECT host:port
+        ├─ inspect_https = false
+        │    └─ open raw tunnel and copy bytes
+        ├─ inspect_https = true + host is known/allowlisted LLM
+        │    └─ return 200 → TLS accept with cached host cert → nested HTTP/1
+        │         → mask decrypted request → HTTPS upstream → rehydrate response
+        └─ unknown host
+              ├─ tunnel_unknown_hosts = true  → raw tunnel
+              └─ tunnel_unknown_hosts = false → 403 before TLS starts
+```
+
+Outbound proxy chaining is an egress-only setting under `proxy.http_proxy.forward_proxy`. It supports `app -> CloakPipe -> corporate proxy -> provider` for both raw CONNECT tunnels and MITM upstream requests. CloakPipe does not inherit process `HTTP_PROXY`/`HTTPS_PROXY` for egress to avoid loops where the proxy accidentally routes through itself.
+
+HTTPS inspection is explicitly local-CA based:
+
+- `tls_mitm.rs` generates `~/.cloakpipe/certs/cloakpipe-ca.crt` and `cloakpipe-ca.key`.
+- Host leaf certificates are generated on demand and cached under `~/.cloakpipe/certs/cache`.
+- Startup preflight requires CA files when `inspect_https = true` and prints platform trust instructions when trust cannot be verified.
+- Only built-in known LLM hosts and `allowed_hosts` are inspected by default; arbitrary hosts are never decrypted unless configured.
 
 ### 8. Audit Logger (`cloakpipe-audit`)
 

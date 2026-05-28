@@ -20,6 +20,10 @@ pub const REQUESTED_ALIAS_HOME_DIR: &str = ".cloackpipe";
 
 pub const MODELS_DIR: &str = "models";
 pub const POLICIES_DIR: &str = "policies";
+pub const CERTS_DIR: &str = "certs";
+pub const CERT_CACHE_DIR: &str = "cache";
+pub const CA_CERT_FILE: &str = "cloakpipe-ca.crt";
+pub const CA_KEY_FILE: &str = "cloakpipe-ca.key";
 
 /// Config filenames to consider while walking project ancestors.
 pub const fn project_config_file_names() -> [&'static str; 2] {
@@ -77,6 +81,22 @@ pub fn global_models_dir() -> Result<PathBuf> {
 
 pub fn global_policies_dir() -> Result<PathBuf> {
     Ok(global_home()?.join(POLICIES_DIR))
+}
+
+pub fn global_certs_dir() -> Result<PathBuf> {
+    Ok(global_home()?.join(CERTS_DIR))
+}
+
+pub fn global_ca_cert_path() -> Result<PathBuf> {
+    Ok(global_certs_dir()?.join(CA_CERT_FILE))
+}
+
+pub fn global_ca_key_path() -> Result<PathBuf> {
+    Ok(global_certs_dir()?.join(CA_KEY_FILE))
+}
+
+pub fn global_cert_cache_dir() -> Result<PathBuf> {
+    Ok(global_certs_dir()?.join(CERT_CACHE_DIR))
 }
 
 pub fn global_distilbert_pii_dir() -> Result<PathBuf> {
@@ -148,5 +168,48 @@ mod tests {
             resolve_config_relative_path(Path::new("/base/project"), "vault.db"),
             PathBuf::from("/base/project/vault.db")
         );
+    }
+
+    #[test]
+    fn global_cert_paths_live_under_certs_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let _guard = EnvVarGuard::set("CLOAKPIPE_HOME", temp_dir.path());
+
+        assert_eq!(global_certs_dir().unwrap(), temp_dir.path().join("certs"));
+        assert_eq!(
+            global_ca_cert_path().unwrap(),
+            temp_dir.path().join("certs/cloakpipe-ca.crt")
+        );
+        assert_eq!(
+            global_ca_key_path().unwrap(),
+            temp_dir.path().join("certs/cloakpipe-ca.key")
+        );
+        assert_eq!(
+            global_cert_cache_dir().unwrap(),
+            temp_dir.path().join("certs/cache")
+        );
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 }

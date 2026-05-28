@@ -77,6 +77,9 @@ pub struct HttpProxyConfig {
     #[serde(default)]
     pub http2_mitm: bool,
     pub max_connect_tunnels: Option<usize>,
+    pub forward_proxy: Option<String>,
+    #[serde(default)]
+    pub forward_no_proxy: Vec<String>,
 }
 
 impl Default for HttpProxyConfig {
@@ -90,6 +93,8 @@ impl Default for HttpProxyConfig {
             cert_cache_dir: None,
             http2_mitm: false,
             max_connect_tunnels: None,
+            forward_proxy: None,
+            forward_no_proxy: Vec::new(),
         }
     }
 }
@@ -453,6 +458,34 @@ mod tests {
         assert!(config.tunnel_unknown_hosts);
         assert!(!config.http2_mitm);
         assert!(config.max_connect_tunnels.is_none());
+        assert!(config.forward_proxy.is_none());
+        assert!(config.forward_no_proxy.is_empty());
+    }
+
+    #[test]
+    fn http_proxy_config_accepts_forward_proxy_settings() {
+        #[derive(Debug, Deserialize)]
+        struct Doc {
+            http_proxy: HttpProxyConfig,
+        }
+
+        let doc: Doc = toml::from_str(
+            r#"
+            [http_proxy]
+            forward_proxy = "http://corp-proxy.example.com:8080"
+            forward_no_proxy = ["localhost", "*.internal"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            doc.http_proxy.forward_proxy.as_deref(),
+            Some("http://corp-proxy.example.com:8080")
+        );
+        assert_eq!(
+            doc.http_proxy.forward_no_proxy,
+            vec!["localhost".to_string(), "*.internal".to_string()]
+        );
     }
 
     #[test]

@@ -299,7 +299,9 @@ pub(crate) fn build_upstream_request(
     headers: &HeaderMap,
     body: Vec<u8>,
 ) -> Result<reqwest::RequestBuilder, (StatusCode, String)> {
-    let mut builder = state.http_client.request(method, target_url);
+    let mut builder = state
+        .http_client_for_url(target_url)
+        .request(method, target_url);
 
     for (name, value) in headers {
         let header_name = name.as_str().to_ascii_lowercase();

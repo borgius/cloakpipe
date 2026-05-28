@@ -7,7 +7,7 @@ use crate::presets::{
 use anyhow::{bail, Context, Result};
 use cloakpipe_audit::AuditSink;
 use cloakpipe_core::{
-    config::{CloakPipeConfig, CustomPattern, DetectionConfig, NerBackend},
+    config::{CloakPipeConfig, CustomPattern, DetectionConfig, NerBackend, ProxyMode},
     detector::Detector,
     paths,
     rehydrator::Rehydrator,
@@ -15,7 +15,7 @@ use cloakpipe_core::{
     vault::Vault,
     MaskingStrategy,
 };
-use cloakpipe_proxy::{server, state::AppState};
+use cloakpipe_proxy::{outbound_proxy, server, state::AppState, tls_mitm};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -379,7 +379,17 @@ fn normalize_config_paths(config: &mut CloakPipeConfig, base_dir: &Path) -> Resu
             Some(default_global_ner_model_path(config.detection.ner.backend)?);
     }
 
+    normalize_optional_path(base_dir, &mut config.proxy.http_proxy.ca_cert_path);
+    normalize_optional_path(base_dir, &mut config.proxy.http_proxy.ca_key_path);
+    normalize_optional_path(base_dir, &mut config.proxy.http_proxy.cert_cache_dir);
+
     Ok(())
+}
+
+fn normalize_optional_path(base_dir: &Path, value: &mut Option<String>) {
+    if let Some(path) = value.as_mut() {
+        *path = paths::resolve_config_relative_string(base_dir, path);
+    }
 }
 
 fn default_global_ner_model_path(backend: NerBackend) -> Result<String> {
@@ -479,6 +489,55 @@ fn resolve_proxy_api_key(config: &CloakPipeConfig) -> Option<String> {
     }
 }
 
+fn preflight_http_proxy_config(config: &CloakPipeConfig) -> Result<()> {
+    if config.proxy.mode != ProxyMode::HttpProxy {
+        return Ok(());
+    }
+
+    if let Some(forward_proxy) = config
+        .proxy
+        .http_proxy
+        .forward_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        outbound_proxy::validate_forward_proxy_url(forward_proxy)?;
+        tracing::info!(
+            forward_proxy = %outbound_proxy::redact_proxy_url(forward_proxy),
+            "http-proxy egress will use configured forwarding proxy"
+        );
+    }
+
+    if !config.proxy.http_proxy.inspect_https {
+        tracing::info!("HTTPS CONNECT traffic will be tunneled without inspection");
+        return Ok(());
+    }
+
+    let status = tls_mitm::ca_status(&config.proxy.http_proxy)?;
+    if !status.ca_cert_exists || !status.ca_key_exists {
+        bail!(
+            "HTTPS inspection is enabled, but the CloakPipe root CA is not initialized.\n\n{}\n\n{}",
+            format_ca_paths(&status),
+            render_ca_install_instructions(default_ca_install_platform(), &status.paths.ca_cert_path)
+        );
+    }
+
+    match detect_ca_trust(&status.paths) {
+        TrustStatus::Trusted => tracing::info!("CloakPipe root CA appears to be trusted"),
+        TrustStatus::NotTrusted => bail!(
+            "HTTPS inspection is enabled, but the CloakPipe root CA does not appear to be trusted.\n\n{}",
+            render_ca_install_instructions(default_ca_install_platform(), &status.paths.ca_cert_path)
+        ),
+        TrustStatus::Unknown => tracing::warn!(
+            "Could not verify whether the CloakPipe root CA is trusted on this platform. If clients reject TLS, install it with:\n{}",
+            render_ca_install_instructions(default_ca_install_platform(), &status.paths.ca_cert_path)
+        ),
+    }
+
+    Ok(())
+}
+
 /// Simple hex decoder.
 fn hex_decode(hex: &str) -> Result<Vec<u8>> {
     let hex = hex.trim();
@@ -499,6 +558,7 @@ pub async fn start(config_path: Option<&str>) -> Result<()> {
     let resolved = load_resolved_config(config_path)?;
     log_resolved_config(&resolved);
     let config = resolved.config;
+    preflight_http_proxy_config(&config)?;
     let key = resolve_vault_key(&config)?;
     let detector = Detector::from_config(&config.detection)?;
     let vault = Vault::open(&config.vault.path, key)?;
@@ -511,7 +571,7 @@ pub async fn start(config_path: Option<&str>) -> Result<()> {
         "Starting CloakPipe proxy"
     );
 
-    let state = AppState::new(config, detector, vault, audit, api_key);
+    let state = AppState::try_new(config, detector, vault, audit, api_key)?;
     server::start(state).await
 }
 
@@ -613,6 +673,269 @@ pub async fn init() -> Result<()> {
     println!("  4. Or run a bundled preset directly: cloakpipe --config dpdp.toml start");
 
     Ok(())
+}
+
+/// Explicit HTTP proxy helper commands.
+pub async fn http_proxy(config_path: Option<&str>, action: crate::HttpProxyCommands) -> Result<()> {
+    match action {
+        crate::HttpProxyCommands::Ca { action } => http_proxy_ca(config_path, action).await,
+    }
+}
+
+async fn http_proxy_ca(
+    config_path: Option<&str>,
+    action: crate::HttpProxyCaCommands,
+) -> Result<()> {
+    let config = load_resolved_config(config_path)?.config;
+    let http_proxy = config.proxy.http_proxy;
+
+    match action {
+        crate::HttpProxyCaCommands::Init { force, dry_run } => {
+            let status = tls_mitm::ca_status(&http_proxy)?;
+            if dry_run {
+                println!("CloakPipe HTTP proxy CA init (dry run)");
+                println!("{}", format_ca_paths(&status));
+                println!("Would create missing CA files and cache directory.");
+                return Ok(());
+            }
+
+            let status = tls_mitm::ensure_root_ca(&http_proxy, force)?;
+            println!("CloakPipe HTTP proxy CA is ready.");
+            println!("{}", format_ca_paths(&status));
+            println!("\nNext step: trust the CA for clients that will use HTTPS inspection.");
+            println!(
+                "{}",
+                render_ca_install_instructions(
+                    default_ca_install_platform(),
+                    &status.paths.ca_cert_path
+                )
+            );
+        }
+        crate::HttpProxyCaCommands::Status => {
+            let status = tls_mitm::ca_status(&http_proxy)?;
+            println!("CloakPipe HTTP proxy CA status");
+            println!("{}", format_ca_paths(&status));
+            println!("Trust: {}", detect_ca_trust(&status.paths));
+        }
+        crate::HttpProxyCaCommands::PrintPath => {
+            let status = tls_mitm::ca_status(&http_proxy)?;
+            println!("cert={}", status.paths.ca_cert_path.display());
+            println!("key={}", status.paths.ca_key_path.display());
+            println!("cache={}", status.paths.cert_cache_dir.display());
+        }
+        crate::HttpProxyCaCommands::Install { platform } => {
+            let status = tls_mitm::ca_status(&http_proxy)?;
+            println!(
+                "{}",
+                render_ca_install_instructions(
+                    platform.unwrap_or_else(default_ca_install_platform),
+                    &status.paths.ca_cert_path,
+                )
+            );
+        }
+        crate::HttpProxyCaCommands::Trust { yes } => {
+            if !yes {
+                bail!("Refusing to modify the trust store without --yes. Run `cloakpipe http-proxy ca install` to print manual instructions.");
+            }
+
+            let status = tls_mitm::ca_status(&http_proxy)?;
+            if !status.ca_cert_exists {
+                bail!("CA certificate does not exist. Run `cloakpipe http-proxy ca init` first.");
+            }
+            trust_ca_best_effort(&status.paths.ca_cert_path)?;
+            println!(
+                "Requested trust-store install for {}",
+                status.paths.ca_cert_path.display()
+            );
+        }
+        crate::HttpProxyCaCommands::Untrust { yes } => {
+            if !yes {
+                bail!("Refusing to modify the trust store without --yes.");
+            }
+
+            untrust_ca_best_effort()?;
+            println!(
+                "Requested trust-store removal for {}",
+                tls_mitm::CA_COMMON_NAME
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn format_ca_paths(status: &tls_mitm::CaStatus) -> String {
+    format!(
+        "  cert:  {} ({})\n  key:   {} ({})\n  cache: {} ({})",
+        status.paths.ca_cert_path.display(),
+        if status.ca_cert_exists {
+            "exists"
+        } else {
+            "missing"
+        },
+        status.paths.ca_key_path.display(),
+        if status.ca_key_exists {
+            "exists"
+        } else {
+            "missing"
+        },
+        status.paths.cert_cache_dir.display(),
+        if status.cert_cache_dir_exists {
+            "exists"
+        } else {
+            "missing"
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrustStatus {
+    Trusted,
+    NotTrusted,
+    Unknown,
+}
+
+impl std::fmt::Display for TrustStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Trusted => formatter.write_str("trusted"),
+            Self::NotTrusted => formatter.write_str("not trusted"),
+            Self::Unknown => formatter.write_str("unknown"),
+        }
+    }
+}
+
+fn detect_ca_trust(paths: &tls_mitm::MitmPaths) -> TrustStatus {
+    if !paths.ca_cert_path.is_file() {
+        return TrustStatus::NotTrusted;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        detect_macos_ca_trust()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        TrustStatus::Unknown
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn detect_macos_ca_trust() -> TrustStatus {
+    let mut keychains = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        keychains.push(PathBuf::from(home).join("Library/Keychains/login.keychain-db"));
+    }
+    keychains.push(PathBuf::from("/Library/Keychains/System.keychain"));
+
+    let mut command_failed = false;
+    for keychain in keychains {
+        match std::process::Command::new("security")
+            .arg("find-certificate")
+            .arg("-c")
+            .arg(tls_mitm::CA_COMMON_NAME)
+            .arg(&keychain)
+            .output()
+        {
+            Ok(output) if output.status.success() => return TrustStatus::Trusted,
+            Ok(_) => {}
+            Err(_) => command_failed = true,
+        }
+    }
+
+    if command_failed {
+        TrustStatus::Unknown
+    } else {
+        TrustStatus::NotTrusted
+    }
+}
+
+fn default_ca_install_platform() -> crate::CaInstallPlatform {
+    if cfg!(target_os = "macos") {
+        crate::CaInstallPlatform::Macos
+    } else if cfg!(target_os = "windows") {
+        crate::CaInstallPlatform::Windows
+    } else {
+        crate::CaInstallPlatform::Linux
+    }
+}
+
+fn render_ca_install_instructions(platform: crate::CaInstallPlatform, cert_path: &Path) -> String {
+    let cert = cert_path.display();
+    match platform {
+        crate::CaInstallPlatform::Macos => format!(
+            "macOS trust install:\n  security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db {cert}\n\nSystem-wide alternative (admin prompt):\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain {cert}"
+        ),
+        crate::CaInstallPlatform::Linux => format!(
+            "Linux trust install:\n  Debian/Ubuntu:\n    sudo cp {cert} /usr/local/share/ca-certificates/cloakpipe-ca.crt\n    sudo update-ca-certificates\n  Fedora/RHEL:\n    sudo cp {cert} /etc/pki/ca-trust/source/anchors/cloakpipe-ca.crt\n    sudo update-ca-trust\n\nRuntime-specific stores:\n  NODE_EXTRA_CA_CERTS={cert}\n  REQUESTS_CA_BUNDLE={cert}\n  SSL_CERT_FILE={cert}\n  CURL_CA_BUNDLE={cert}"
+        ),
+        crate::CaInstallPlatform::Windows => format!(
+            "Windows trust install (PowerShell):\n  Import-Certificate -FilePath '{cert}' -CertStoreLocation Cert:\\CurrentUser\\Root\n\nFor machine-wide trust, use an elevated PowerShell and Cert:\\LocalMachine\\Root."
+        ),
+    }
+}
+
+fn trust_ca_best_effort(cert_path: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME") else {
+            bail!("Cannot find HOME to locate the macOS login keychain");
+        };
+        let keychain = PathBuf::from(home).join("Library/Keychains/login.keychain-db");
+        let status = std::process::Command::new("security")
+            .arg("add-trusted-cert")
+            .arg("-r")
+            .arg("trustRoot")
+            .arg("-k")
+            .arg(&keychain)
+            .arg(cert_path)
+            .status()
+            .context("Failed to launch macOS security tool")?;
+
+        if !status.success() {
+            bail!("macOS security tool failed to add the CloakPipe CA");
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        bail!(
+            "Automatic trust installation is only implemented for macOS in this build.\n{}",
+            render_ca_install_instructions(default_ca_install_platform(), cert_path)
+        )
+    }
+}
+
+fn untrust_ca_best_effort() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME") else {
+            bail!("Cannot find HOME to locate the macOS login keychain");
+        };
+        let keychain = PathBuf::from(home).join("Library/Keychains/login.keychain-db");
+        let status = std::process::Command::new("security")
+            .arg("delete-certificate")
+            .arg("-c")
+            .arg(tls_mitm::CA_COMMON_NAME)
+            .arg(&keychain)
+            .status()
+            .context("Failed to launch macOS security tool")?;
+
+        if !status.success() {
+            bail!("macOS security tool failed to remove the CloakPipe CA from the login keychain");
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        bail!(
+            "Automatic trust removal is only implemented for macOS in this build. Remove `{}` from your trust store manually.",
+            tls_mitm::CA_COMMON_NAME
+        )
+    }
 }
 
 /// Bundled preset management commands.

@@ -70,6 +70,11 @@ enum Commands {
         #[command(subcommand)]
         action: NerCommands,
     },
+    /// Explicit HTTP proxy helpers (CA setup for HTTPS inspection)
+    HttpProxy {
+        #[command(subcommand)]
+        action: HttpProxyCommands,
+    },
     /// Scan files/directories for PII (RAG pre-indexing pipeline)
     Scan {
         /// Input file or directory (recursively scans .txt, .md, .json, .csv)
@@ -179,6 +184,57 @@ pub enum NerDownloadBackend {
 }
 
 #[derive(Subcommand)]
+pub enum HttpProxyCommands {
+    /// Manage the local root CA used by opt-in HTTPS inspection
+    Ca {
+        #[command(subcommand)]
+        action: HttpProxyCaCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HttpProxyCaCommands {
+    /// Generate the local CloakPipe root CA and host certificate cache directory
+    Init {
+        /// Overwrite an existing CloakPipe CA certificate/key pair
+        #[arg(long)]
+        force: bool,
+        /// Print what would be created without writing files
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show CA file and trust status
+    Status,
+    /// Print CA certificate, key, and cache paths
+    PrintPath,
+    /// Print platform-specific trust-store install instructions
+    Install {
+        /// Platform instructions to print
+        #[arg(long, value_enum)]
+        platform: Option<CaInstallPlatform>,
+    },
+    /// Best-effort trust-store install; requires --yes
+    Trust {
+        /// Confirm that CloakPipe may modify the user trust store
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Best-effort trust-store removal; requires --yes
+    Untrust {
+        /// Confirm that CloakPipe may modify the user trust store
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum CaInstallPlatform {
+    Macos,
+    Linux,
+    Windows,
+}
+
+#[derive(Subcommand)]
 pub enum TreeCommands {
     /// Build a tree index from a document
     Index {
@@ -285,6 +341,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Vector { action } => commands::vector(action).await,
         Commands::Sessions { action } => commands::sessions(config, action).await,
         Commands::Ner { action } => commands::ner(action).await,
+        Commands::HttpProxy { action } => commands::http_proxy(config, action).await,
         Commands::Scan {
             input,
             output,
@@ -345,5 +402,19 @@ mod tests {
         ]);
 
         assert!(matches!(cli.command, Commands::Scan { no_ner: true, .. }));
+    }
+
+    #[test]
+    fn http_proxy_ca_init_command_parses() {
+        let cli = Cli::parse_from(["cloakpipe", "http-proxy", "ca", "init", "--dry-run"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::HttpProxy {
+                action: HttpProxyCommands::Ca {
+                    action: HttpProxyCaCommands::Init { dry_run: true, .. }
+                }
+            }
+        ));
     }
 }

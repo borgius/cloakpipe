@@ -78,7 +78,7 @@ Three important points:
 
 - `proxy` is the preexisting mode.
 - `llm-http` is broader, but it still expects the client to talk to CloakPipe.
-- `http-proxy` is the transparent network-proxy mode. Plain HTTP traffic can be inspected and mutated. HTTPS traffic uses CONNECT and is currently tunneled unchanged unless a future explicit MITM/CA layer is added.
+- `http-proxy` is the transparent network-proxy mode. Plain HTTP traffic can be inspected and mutated. HTTPS traffic uses CONNECT; by default it is tunneled unchanged, and opt-in HTTPS inspection is available for known or allowlisted LLM hosts after you install a local CloakPipe CA.
 
 #### Mode 1: `proxy` (preexisting)
 
@@ -154,6 +154,9 @@ auth_mode = "pass-through"
 inspect_https = false
 tunnel_unknown_hosts = true
 allowed_hosts = ["api.openai.com", "api.anthropic.com"]
+# Optional corporate proxy chain for CloakPipe egress:
+# forward_proxy = "http://corp-proxy.example.com:8080"
+# forward_no_proxy = ["localhost", "127.0.0.1"]
 ```
 
 How to use it:
@@ -171,9 +174,55 @@ export NO_PROXY=localhost,127.0.0.1
 Current behavior:
 
 - Plain `http://...` requests are parsed as forward-proxy absolute-form requests, masked before upstream, and rehydrated on the way back.
-- `https://...` requests arrive as CONNECT tunnels. CloakPipe opens the tunnel and relays encrypted bytes unchanged.
-- Because encrypted HTTPS bodies are opaque, CloakPipe cannot mask HTTPS request bodies in this mode yet. Real HTTPS mutation requires a separate, explicit local CA/MITM feature so the client can trust CloakPipe for allowlisted LLM hosts.
+- `https://...` requests arrive as CONNECT tunnels. With `inspect_https = false`, CloakPipe opens the tunnel and relays encrypted bytes unchanged.
+- With `inspect_https = true`, CloakPipe decrypts, masks, forwards, rehydrates, and re-encrypts HTTPS requests only for built-in known LLM hosts or hosts listed in `allowed_hosts`.
 - If `allowed_hosts` is set, plaintext HTTP mutation only runs for matching hosts. Other hosts are forwarded unchanged. CONNECT requests to unknown hosts are tunneled when `tunnel_unknown_hosts = true`.
+- `forward_proxy` chains CloakPipe's outbound traffic through a corporate HTTP proxy: `app -> CloakPipe -> corp-proxy -> provider`. CloakPipe does not inherit process `HTTP_PROXY`/`HTTPS_PROXY` for egress, which avoids accidental loops.
+
+##### HTTPS inspection setup
+
+HTTPS inspection is explicit because the client must trust a local CloakPipe root CA.
+
+```bash
+cloakpipe http-proxy ca init
+cloakpipe http-proxy ca install
+# Optional best-effort automatic trust on supported platforms:
+cloakpipe http-proxy ca trust --yes
+```
+
+Then enable inspection:
+
+```toml
+[proxy]
+mode = "http-proxy"
+
+[proxy.http_proxy]
+inspect_https = true
+allowed_hosts = ["api.openai.com", "api.anthropic.com"]
+tunnel_unknown_hosts = true
+```
+
+Keep your SDK pointed at the real provider, start CloakPipe, and set the app process proxy variables:
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:8900
+export HTTPS_PROXY=http://127.0.0.1:8900
+export NO_PROXY=localhost,127.0.0.1
+```
+
+If a runtime does not use the OS trust store, point it at the CA printed by `cloakpipe http-proxy ca print-path`. Common variables are `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, and `CURL_CA_BUNDLE`.
+
+##### Corporate proxy chaining
+
+For environments that require outbound traffic through a corporate proxy, configure CloakPipe egress explicitly:
+
+```toml
+[proxy.http_proxy]
+forward_proxy = "http://corp-proxy.example.com:8080"
+forward_no_proxy = ["localhost", "127.0.0.1"]
+```
+
+Credentials can be embedded in the URL (`http://user:pass@corp-proxy.example.com:8080`); CloakPipe redacts them in logs/errors. Inbound app proxy credentials stay separate from outbound corporate proxy credentials.
 
 ### Verify it works
 

@@ -1,5 +1,7 @@
 //! Shared application state for the proxy server.
 
+use crate::outbound_proxy;
+use anyhow::Result;
 use cloakpipe_audit::AuditSink;
 use cloakpipe_core::{
     config::{CloakPipeConfig, DetectionConfig, ProxyAuthMode},
@@ -19,6 +21,7 @@ pub struct AppState {
     pub vault: Arc<Mutex<Vault>>,
     pub audit: AuditSink,
     pub http_client: reqwest::Client,
+    pub direct_http_client: reqwest::Client,
     pub api_key: Option<String>,
     pub sessions: Arc<SessionManager>,
 }
@@ -31,17 +34,25 @@ impl AppState {
         audit: AuditSink,
         api_key: Option<String>,
     ) -> Self {
+        Self::try_new(config, detector, vault, audit, api_key).expect("Failed to build app state")
+    }
+
+    pub fn try_new(
+        config: CloakPipeConfig,
+        detector: Detector,
+        vault: Vault,
+        audit: AuditSink,
+        api_key: Option<String>,
+    ) -> Result<Self> {
         let detection_config = config.detection.clone();
         let active_profile = config.profile.clone();
-        let http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(config.proxy.timeout_seconds))
-            .build()
-            .expect("Failed to build HTTP client");
+        let http_client = outbound_proxy::build_http_client(&config, true)?;
+        let direct_http_client = outbound_proxy::build_http_client(&config, false)?;
 
         let sessions = Arc::new(SessionManager::new(config.session.clone()));
         ensure_global_session(&sessions);
 
-        Self {
+        Ok(Self {
             config,
             detector: Arc::new(RwLock::new(detector)),
             detection_config: Arc::new(RwLock::new(detection_config)),
@@ -49,9 +60,24 @@ impl AppState {
             vault: Arc::new(Mutex::new(vault)),
             audit,
             http_client,
+            direct_http_client,
             api_key,
             sessions,
+        })
+    }
+
+    /// Return the outbound HTTP client for a target URL, honoring forward_no_proxy.
+    pub fn http_client_for_url(&self, target_url: &str) -> &reqwest::Client {
+        if let Ok(url) = reqwest::Url::parse(target_url) {
+            if let Some(host) = url.host_str() {
+                if outbound_proxy::should_bypass_forward_proxy(&self.config.proxy.http_proxy, host)
+                {
+                    return &self.direct_http_client;
+                }
+            }
         }
+
+        &self.http_client
     }
 
     /// Return the configured upstream API key, if present.

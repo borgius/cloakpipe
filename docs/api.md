@@ -78,6 +78,9 @@ auth_mode = "pass-through"
 inspect_https = false
 tunnel_unknown_hosts = true
 allowed_hosts = ["api.openai.com", "api.anthropic.com"]
+# Optional corporate proxy chain for CloakPipe egress:
+# forward_proxy = "http://corp-proxy.example.com:8080"
+# forward_no_proxy = ["localhost", "127.0.0.1"]
 ```
 
 `proxy.upstream` is the default OpenAI-compatible base URL for the fixed `proxy` handler and the OpenAI-compatible fallback in `llm-http`. In `llm-http` mode, `proxy.provider_routes` lets you override provider-specific upstreams. `openai` is optional because the proxy already uses `proxy.upstream` for OpenAI-compatible paths.
@@ -91,6 +94,42 @@ export NO_PROXY=localhost,127.0.0.1
 ```
 
 Plain HTTP requests are inspected and mutated when they use the normal forward-proxy absolute-form request target, for example `POST http://api.example.test/v1/chat/completions HTTP/1.1`. HTTPS requests use `CONNECT host:port`; CloakPipe currently tunnels CONNECT bytes unchanged. HTTPS request-body mutation requires a future explicit local CA/MITM layer and is not active today.
+
+With `proxy.http_proxy.inspect_https = true`, CloakPipe performs opt-in HTTPS inspection for built-in known LLM hosts and hosts listed in `proxy.http_proxy.allowed_hosts`. Before startup, initialize and trust the local CA:
+
+```bash
+cloakpipe http-proxy ca init
+cloakpipe http-proxy ca install
+cloakpipe http-proxy ca trust --yes  # optional best-effort trust-store install
+```
+
+Useful CA commands:
+
+- `cloakpipe http-proxy ca status` — show CA files and trust status.
+- `cloakpipe http-proxy ca print-path` — print the CA cert, key, and host-cert cache paths.
+- `cloakpipe http-proxy ca install --platform macos|linux|windows` — print platform-specific install instructions.
+- `cloakpipe http-proxy ca trust --yes` — best-effort automatic trust install where supported.
+- `cloakpipe http-proxy ca untrust --yes` — best-effort trust removal where supported.
+
+When HTTPS inspection is enabled, CONNECT handling is:
+
+1. If the host is a built-in LLM endpoint or matches `allowed_hosts`, CloakPipe generates or reuses a cached leaf certificate for that host, signed by the local root CA.
+2. CloakPipe decrypts the client's HTTP/1.1 request inside the CONNECT tunnel.
+3. The normal masking pipeline runs on textual bodies.
+4. CloakPipe forwards the request to `https://host/path` using the configured outbound client.
+5. The response is rehydrated and encrypted back to the client.
+
+Unknown hosts are tunneled unchanged when `tunnel_unknown_hosts = true`; otherwise CloakPipe returns `403` before TLS starts. Runtime-specific trust stores may still need the CA path from `ca print-path`, for example `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, or `CURL_CA_BUNDLE`.
+
+Corporate proxy chaining is configured on CloakPipe egress, not inherited from CloakPipe's environment:
+
+```toml
+[proxy.http_proxy]
+forward_proxy = "http://corp-proxy.example.com:8080"
+forward_no_proxy = ["localhost", "127.0.0.1", "*.internal.example"]
+```
+
+This produces `app -> CloakPipe -> corp-proxy -> provider`. Credentials in `forward_proxy` are used only for the corporate proxy and are redacted in logs. Inbound `Proxy-Authorization` from the app is stripped before provider/corporate-proxy forwarding.
 
 ### Required server-side configuration
 
@@ -184,7 +223,7 @@ If you are building a client, treat error bodies as opaque text unless you know 
 | `/v1/embeddings` | `POST` | Pseudonymize embedding input, proxy upstream |
 | `/*path` (when `proxy.mode = "llm-http"`) | `ANY` | Raw multi-provider LLM proxy with request mutation and response rehydration |
 | Absolute-form `http://...` (when `proxy.mode = "http-proxy"`) | `ANY` | Explicit forward-proxy HTTP request with request mutation and response rehydration |
-| Authority-form `CONNECT host:port` (when `proxy.mode = "http-proxy"`) | `CONNECT` | HTTPS tunnel relay; encrypted bytes are currently passed through unchanged |
+| Authority-form `CONNECT host:port` (when `proxy.mode = "http-proxy"`) | `CONNECT` | HTTPS tunnel relay by default; opt-in local-CA MITM for known/allowlisted LLM hosts when `inspect_https = true` |
 | `/tree/index` | `POST` | Build and save a tree index from raw text |
 | `/tree/index/file` | `POST` | Build and save a tree index from a file path on the server |
 | `/tree/list` | `GET` | List saved tree indices |
