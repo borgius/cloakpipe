@@ -65,7 +65,7 @@ enum Commands {
         #[command(subcommand)]
         action: SessionCommands,
     },
-    /// NER backend helpers (install sidecar dependencies, etc.)
+    /// NER backend helpers (download models, start sidecars, etc.)
     Ner {
         #[command(subcommand)]
         action: NerCommands,
@@ -124,26 +124,11 @@ pub enum PolicyCommands {
 
 #[derive(Subcommand)]
 pub enum NerCommands {
-    /// Install a supported NER backend locally
-    Install {
-        /// Backend to install
-        #[arg(long, value_enum, default_value_t = NerInstallBackend::GlinerPii)]
-        backend: NerInstallBackend,
-        /// Print the install command without running it
-        #[arg(long)]
-        dry_run: bool,
-        /// Python interpreter to use (defaults to python3/python/py auto-detect)
-        #[arg(long)]
-        python: Option<String>,
-        /// Skip verifying that the backend imports after install
-        #[arg(long)]
-        no_verify: bool,
-    },
     /// Start a supported NER backend sidecar locally
     Start {
         /// Backend to start
-        #[arg(long, value_enum, default_value_t = NerInstallBackend::GlinerPii)]
-        backend: NerInstallBackend,
+        #[arg(long, value_enum, default_value_t = NerStartBackend::GlinerPii)]
+        backend: NerStartBackend,
         /// Python interpreter to use (defaults to the managed venv when present)
         #[arg(long)]
         python: Option<String>,
@@ -160,25 +145,44 @@ pub enum NerCommands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Download model files for a built-in NER backend
+    /// Download or bootstrap a supported NER model/runtime
     Download {
-        /// Backend model to download
-        #[arg(long, value_enum, default_value_t = NerDownloadBackend::DistilbertPii)]
-        backend: NerDownloadBackend,
-        /// Re-download even if model files already exist
+        /// Model/runtime to download or bootstrap
+        #[arg(long, value_enum, default_value_t = NerDownloadModel::DistilbertPii)]
+        model: NerDownloadModel,
+        /// Re-download even if DistilBERT-PII model files already exist
         #[arg(long)]
         force: bool,
+        /// Print the download/setup command without running it
+        #[arg(long)]
+        dry_run: bool,
+        /// Python interpreter to use for the managed GLiNER-PII runtime
+        #[arg(long)]
+        python: Option<String>,
+        /// Skip verifying that GLiNER-PII imports after download/setup
+        #[arg(long)]
+        no_verify: bool,
+    },
+    /// Show the status of downloaded NER models
+    Status {
+        /// Print the status as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-pub enum NerInstallBackend {
+pub enum NerStartBackend {
     #[value(alias = "gliner_pii")]
     GlinerPii,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-pub enum NerDownloadBackend {
+pub enum NerDownloadModel {
+    Bert,
+    Gliner,
+    #[value(alias = "gliner_pii")]
+    GlinerPii,
     #[value(alias = "distilbert_pii")]
     DistilbertPii,
 }
@@ -402,6 +406,60 @@ mod tests {
         ]);
 
         assert!(matches!(cli.command, Commands::Scan { no_ner: true, .. }));
+    }
+
+    #[test]
+    fn ner_status_command_parses() {
+        let cli = Cli::parse_from(["cloakpipe", "ner", "status"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ner {
+                action: NerCommands::Status { json: false }
+            }
+        ));
+    }
+
+    #[test]
+    fn ner_status_json_flag_parses() {
+        let cli = Cli::parse_from(["cloakpipe", "ner", "status", "--json"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ner {
+                action: NerCommands::Status { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn ner_download_defaults_to_distilbert_pii() {
+        let cli = Cli::parse_from(["cloakpipe", "ner", "download"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ner {
+                action: NerCommands::Download {
+                    model: NerDownloadModel::DistilbertPii,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn ner_download_model_flag_parses() {
+        let cli = Cli::parse_from(["cloakpipe", "ner", "download", "--model", "gliner_pii"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ner {
+                action: NerCommands::Download {
+                    model: NerDownloadModel::GlinerPii,
+                    ..
+                }
+            }
+        ));
     }
 
     #[test]

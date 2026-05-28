@@ -1,4 +1,4 @@
-//! Integration tests for the `cloakpipe ner install` CLI command.
+//! Integration tests for the `cloakpipe ner download` CLI command.
 
 use std::fs;
 use std::process::Command;
@@ -7,26 +7,26 @@ use std::process::Command;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
-fn test_ner_install_dry_run() {
+fn test_ner_download_gliner_pii_dry_run() {
     let config_home = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
         .env("CLOAKPIPE_HOME", config_home.path())
         .args([
             "ner",
-            "install",
+            "download",
             "--dry-run",
+            "--model",
+            "gliner-pii",
             "--python",
             "python3",
-            "--backend",
-            "gliner-pii",
         ])
         .output()
-        .expect("failed to run cloakpipe ner install --dry-run");
+        .expect("failed to run cloakpipe ner download --dry-run");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "ner install dry-run should succeed: {}",
+        "ner download dry-run should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
@@ -50,7 +50,7 @@ fn test_ner_install_dry_run() {
 
 #[cfg(unix)]
 #[test]
-fn test_ner_install_falls_back_to_local_virtualenv_when_python_is_externally_managed() {
+fn test_ner_download_gliner_pii_falls_back_to_local_virtualenv_when_python_is_externally_managed() {
     let dir = tempfile::tempdir().unwrap();
     let config_home = tempfile::tempdir().unwrap();
     let fake_python = dir.path().join("fake-python");
@@ -103,19 +103,19 @@ exit 1
         .env("CLOAKPIPE_HOME", config_home.path())
         .args([
             "ner",
-            "install",
+            "download",
+            "--model",
+            "gliner-pii",
             "--python",
             fake_python.to_str().unwrap(),
-            "--backend",
-            "gliner-pii",
         ])
         .output()
-        .expect("failed to run cloakpipe ner install with fake python");
+        .expect("failed to run cloakpipe ner download with fake python");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "ner install should succeed via virtualenv fallback: {}",
+        "ner download should succeed via virtualenv fallback: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(stdout.contains("Detected an externally managed Python environment."));
@@ -123,7 +123,7 @@ exit 1
         "Falling back to a local virtualenv at {}",
         config_home.path().join("gliner-pii-venv").display()
     )));
-    assert!(stdout.contains("Installed gliner successfully."));
+    assert!(stdout.contains("Downloaded gliner runtime successfully."));
     assert!(stdout.contains("Start the sidecar: cloakpipe ner start"));
     assert!(config_home
         .path()

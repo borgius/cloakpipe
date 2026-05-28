@@ -331,7 +331,7 @@ Masked Output (total: <20ms on any laptop CPU)
 | BERT NER | `bert` | ~400MB | 20-40ms | Any CPU | Legacy 4-type NER (PER/ORG/LOC/MISC) |
 | GLiNER2 | `gliner` | ~800MB | 50ms | Any CPU | Legacy zero-shot NER |
 
-Downloadable/default model assets live under `~/.cloakpipe/models/` by default. Use `cloakpipe ner download` to install DistilBERT-PII there. Managed GLiNER sidecar dependencies live under `~/.cloakpipe/gliner-pii-venv/`.
+Downloadable/default model assets live under `~/.cloakpipe/models/` by default. Use `cloakpipe ner download` for DistilBERT-PII, or `cloakpipe ner download --model gliner_pii` to bootstrap the managed GLiNER-PII sidecar runtime at `~/.cloakpipe/gliner-pii-venv/`. Run `cloakpipe ner status` to see all supported NER backends and their current status.
 
 ### Similar-value pseudonymization
 

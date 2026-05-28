@@ -24,9 +24,9 @@ impl Drop for StartedSidecar {
 }
 
 #[tokio::test]
-async fn test_ner_install_and_start_expose_working_sidecar() {
+async fn test_ner_download_and_start_expose_working_sidecar() {
     let fixture = NerFixture::new().unwrap();
-    let sidecar = fixture.install_and_start().await;
+    let sidecar = fixture.download_and_start().await;
     let client = Client::new();
 
     let health = client
@@ -64,7 +64,7 @@ async fn test_ner_install_and_start_expose_working_sidecar() {
 #[tokio::test]
 async fn test_cloakpipe_test_command_uses_gliner_sidecar_entities() {
     let fixture = NerFixture::new().unwrap();
-    let sidecar = fixture.install_and_start().await;
+    let sidecar = fixture.download_and_start().await;
     let config_path = fixture.write_config(sidecar.port).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
@@ -139,29 +139,29 @@ impl NerFixture {
         Ok(())
     }
 
-    async fn install_and_start(&self) -> StartedSidecar {
-        let install_output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+    async fn download_and_start(&self) -> StartedSidecar {
+        let download_output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
             .current_dir(self.project_root())
             .env("CLOAKPIPE_HOME", self.global_home())
             .args([
                 "ner",
-                "install",
+                "download",
+                "--model",
+                "gliner-pii",
                 "--python",
                 self.project_root().join("fake-python").to_str().unwrap(),
-                "--backend",
-                "gliner-pii",
             ])
             .output()
-            .expect("failed to run cloakpipe ner install");
+            .expect("failed to run cloakpipe ner download");
 
         assert!(
-            install_output.status.success(),
-            "cloakpipe ner install should succeed: {}",
-            String::from_utf8_lossy(&install_output.stderr)
+            download_output.status.success(),
+            "cloakpipe ner download should succeed: {}",
+            String::from_utf8_lossy(&download_output.stderr)
         );
-        let install_stdout = String::from_utf8_lossy(&install_output.stdout);
-        assert!(install_stdout.contains("Falling back to a local virtualenv"));
-        assert!(install_stdout.contains("Installed gliner successfully."));
+        let download_stdout = String::from_utf8_lossy(&download_output.stdout);
+        assert!(download_stdout.contains("Falling back to a local virtualenv"));
+        assert!(download_stdout.contains("Downloaded gliner runtime successfully."));
         assert!(self
             .global_home()
             .join("gliner-pii-venv/bin/python")

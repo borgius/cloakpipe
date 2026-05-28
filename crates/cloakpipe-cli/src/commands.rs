@@ -37,6 +37,63 @@ const GLINER_SIDECAR_URL: &str = "http://127.0.0.1:9111";
 const GLINER_SERVER_SCRIPT: &str = "tools/gliner-pii-server.py";
 
 const DISTILBERT_DOWNLOAD_SCRIPT: &str = "tools/download_model.sh";
+const DISTILBERT_PII_BACKEND: &str = "distilbert_pii";
+const BERT_BACKEND: &str = "bert";
+const GLINER_BACKEND: &str = "gliner";
+const GLINER_PII_BACKEND: &str = "gliner_pii";
+const DISTILBERT_PII_STATUS_LABEL: &str =
+    "DistilBERT-PII NER (63MB ONNX, 33 entity types, runs on any CPU)";
+const GLINER_PII_STATUS_LABEL: &str =
+    "GLiNER-PII sidecar (managed Python runtime for custom entity types)";
+const BERT_STATUS_LABEL: &str = "BERT NER (legacy 4-type ONNX model)";
+const GLINER_STATUS_LABEL: &str = "GLiNER2 (legacy zero-shot ONNX model)";
+const DISTILBERT_PII_DOWNLOAD_HINT: &str = "cloakpipe ner download";
+const GLINER_PII_DOWNLOAD_HINT: &str = "cloakpipe ner download --model gliner_pii";
+const DISTILBERT_PII_REQUIRED_FILES: &[&str] = &[
+    "quantized/model_quantized.onnx",
+    "config.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadedModelStatus {
+    Installed,
+    Incomplete,
+    Missing,
+}
+
+impl DownloadedModelStatus {
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Installed => "✓",
+            Self::Incomplete => "!",
+            Self::Missing => "✗",
+        }
+    }
+}
+
+impl std::fmt::Display for DownloadedModelStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Installed => formatter.write_str("installed"),
+            Self::Incomplete => formatter.write_str("incomplete"),
+            Self::Missing => formatter.write_str("missing"),
+        }
+    }
+}
+
+struct NerModelReport {
+    backend: &'static str,
+    name: &'static str,
+    status: DownloadedModelStatus,
+    files_present: usize,
+    total_files: usize,
+    location: PathBuf,
+    missing_files: Vec<PathBuf>,
+    install_hint: Option<&'static str>,
+}
 
 enum ConfigSource {
     Existing(PathBuf),
@@ -1681,14 +1738,6 @@ pub async fn setup() -> Result<()> {
 /// NER management commands.
 pub async fn ner(action: crate::NerCommands) -> Result<()> {
     match action {
-        crate::NerCommands::Install {
-            backend,
-            dry_run,
-            python,
-            no_verify,
-        } => match backend {
-            crate::NerInstallBackend::GlinerPii => install_gliner_pii(python, dry_run, no_verify),
-        },
         crate::NerCommands::Start {
             backend,
             python,
@@ -1697,20 +1746,212 @@ pub async fn ner(action: crate::NerCommands) -> Result<()> {
             threshold,
             dry_run,
         } => match backend {
-            crate::NerInstallBackend::GlinerPii => {
+            crate::NerStartBackend::GlinerPii => {
                 start_gliner_pii(python, host, port, threshold, dry_run)
             }
         },
-        crate::NerCommands::Download { backend, force } => match backend {
-            crate::NerDownloadBackend::DistilbertPii => download_distilbert_pii(force).await,
+        crate::NerCommands::Download {
+            model,
+            force,
+            dry_run,
+            python,
+            no_verify,
+        } => match model {
+            crate::NerDownloadModel::DistilbertPii => {
+                if python.is_some() || no_verify {
+                    bail!(
+                        "--python and --no-verify only apply to `cloakpipe ner download --model gliner_pii`."
+                    );
+                }
+                download_distilbert_pii(force, dry_run).await
+            }
+            crate::NerDownloadModel::GlinerPii => {
+                if force {
+                    bail!(
+                        "--force only applies to `cloakpipe ner download --model distilbert_pii`."
+                    );
+                }
+                download_gliner_pii(python, dry_run, no_verify)
+            }
+            crate::NerDownloadModel::Bert => legacy_ner_download_unavailable(
+                BERT_BACKEND,
+                &paths::global_bert_ner_model_path()?,
+                dry_run,
+            ),
+            crate::NerDownloadModel::Gliner => legacy_ner_download_unavailable(
+                GLINER_BACKEND,
+                &paths::global_gliner_model_path()?,
+                dry_run,
+            ),
         },
+        crate::NerCommands::Status { json } => ner_status(json),
+    }
+}
+
+fn ner_status(json: bool) -> Result<()> {
+    let home = paths::global_home()?;
+    let models_dir = paths::global_models_dir()?;
+    let reports = collect_ner_model_reports()?;
+
+    if json {
+        println!("{}", render_ner_status_json(&home, &models_dir, &reports)?);
+        return Ok(());
+    }
+
+    println!("NER model status");
+    println!("home: {}", home.display());
+    println!("models: {}", models_dir.display());
+
+    for report in &reports {
+        println!();
+        print_ner_model_report(report);
+    }
+
+    Ok(())
+}
+
+fn render_ner_status_json(home: &Path, models_dir: &Path, reports: &[NerModelReport]) -> Result<String> {
+    let models: Vec<serde_json::Value> = reports.iter().map(ner_model_report_json).collect();
+
+    serde_json::to_string_pretty(&serde_json::json!({
+        "home": path_arg(home),
+        "models_dir": path_arg(models_dir),
+        "models": models,
+    }))
+    .context("Cannot serialize NER status JSON")
+}
+
+fn ner_model_report_json(report: &NerModelReport) -> serde_json::Value {
+    serde_json::json!({
+        "backend": report.backend,
+        "name": report.name,
+        "status": report.status.to_string(),
+        "files_present": report.files_present,
+        "total_files": report.total_files,
+        "location": path_arg(&report.location),
+        "missing_files": report
+            .missing_files
+            .iter()
+            .map(|path| path_arg(path))
+            .collect::<Vec<_>>(),
+        "download_command": report.install_hint,
+    })
+}
+
+fn collect_ner_model_reports() -> Result<Vec<NerModelReport>> {
+    Ok(vec![
+        distilbert_pii_model_report()?,
+        gliner_pii_model_report()?,
+        single_file_model_report(
+            BERT_BACKEND,
+            BERT_STATUS_LABEL,
+            paths::global_bert_ner_model_path()?,
+            None,
+        ),
+        single_file_model_report(
+            GLINER_BACKEND,
+            GLINER_STATUS_LABEL,
+            paths::global_gliner_model_path()?,
+            None,
+        ),
+    ])
+}
+
+fn distilbert_pii_model_report() -> Result<NerModelReport> {
+    let model_dir = paths::global_distilbert_pii_dir()?;
+    let expected_files = DISTILBERT_PII_REQUIRED_FILES
+        .iter()
+        .map(|relative_path| model_dir.join(relative_path))
+        .collect();
+
+    Ok(build_ner_model_report(
+        DISTILBERT_PII_BACKEND,
+        DISTILBERT_PII_STATUS_LABEL,
+        model_dir,
+        expected_files,
+        Some(DISTILBERT_PII_DOWNLOAD_HINT),
+    ))
+}
+
+fn gliner_pii_model_report() -> Result<NerModelReport> {
+    let runtime_dir = default_gliner_venv_dir()?;
+    let python = virtualenv_python_path(&runtime_dir);
+
+    Ok(build_ner_model_report(
+        GLINER_PII_BACKEND,
+        GLINER_PII_STATUS_LABEL,
+        runtime_dir,
+        vec![python],
+        Some(GLINER_PII_DOWNLOAD_HINT),
+    ))
+}
+
+fn single_file_model_report(
+    backend: &'static str,
+    name: &'static str,
+    path: PathBuf,
+    download_hint: Option<&'static str>,
+) -> NerModelReport {
+    build_ner_model_report(backend, name, path.clone(), vec![path], download_hint)
+}
+
+fn build_ner_model_report(
+    backend: &'static str,
+    name: &'static str,
+    location: PathBuf,
+    expected_files: Vec<PathBuf>,
+    install_hint: Option<&'static str>,
+) -> NerModelReport {
+    let missing_files: Vec<PathBuf> = expected_files
+        .iter()
+        .filter(|path| !path.is_file())
+        .cloned()
+        .collect();
+    let files_present = expected_files.len().saturating_sub(missing_files.len());
+    let status = match files_present {
+        0 => DownloadedModelStatus::Missing,
+        present if present == expected_files.len() => DownloadedModelStatus::Installed,
+        _ => DownloadedModelStatus::Incomplete,
+    };
+
+    NerModelReport {
+        backend,
+        name,
+        status,
+        files_present,
+        total_files: expected_files.len(),
+        location,
+        missing_files,
+        install_hint: if status == DownloadedModelStatus::Installed {
+            None
+        } else {
+            install_hint
+        },
+    }
+}
+
+fn print_ner_model_report(report: &NerModelReport) {
+    println!("{} {}", report.status.icon(), report.name);
+    println!("  status: {}", report.status);
+    println!("  files: {}/{} present", report.files_present, report.total_files);
+    println!("  location: {}", report.location.display());
+
+    if !report.missing_files.is_empty() {
+        println!("  missing:");
+        for path in &report.missing_files {
+            println!("    {}", path.display());
+        }
+    }
+
+    if let Some(command) = report.install_hint {
+        println!("  download: {}", command);
     }
 }
 
 /// Download the DistilBERT-PII quantized ONNX model.
 /// Delegates to tools/download_model.sh which tries GitHub LFS first,
 /// then falls back to HuggingFace download + ONNX conversion.
-async fn download_distilbert_pii(force: bool) -> Result<()> {
+async fn download_distilbert_pii(force: bool, dry_run: bool) -> Result<()> {
     ensure_global_layout()?;
     let current_dir = std::env::current_dir().context("Cannot determine current directory")?;
     let project_root = find_gliner_project_root(&current_dir)?;
@@ -1730,6 +1971,16 @@ async fn download_distilbert_pii(force: bool) -> Result<()> {
         cmd.arg("--force");
     }
 
+    if dry_run {
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        println!("NER model: {}", DISTILBERT_PII_BACKEND);
+        println!("Would run: {}", format_command(Path::new("bash"), &args));
+        return Ok(());
+    }
+
     let status = cmd
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -1743,7 +1994,21 @@ async fn download_distilbert_pii(force: bool) -> Result<()> {
     Ok(())
 }
 
-fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) -> Result<()> {
+fn legacy_ner_download_unavailable(label: &str, path: &Path, dry_run: bool) -> Result<()> {
+    let message = format!(
+        "No managed download helper exists yet for `{label}`. Place the model file at {}.",
+        path.display()
+    );
+
+    if dry_run {
+        println!("{}", message);
+        return Ok(());
+    }
+
+    bail!(message)
+}
+
+fn download_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) -> Result<()> {
     ensure_global_layout()?;
     let user_specified_python = python.is_some();
     let python = PathBuf::from(match python {
@@ -1769,7 +2034,7 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
     ];
 
     if dry_run {
-        println!("NER backend: gliner-pii");
+        println!("NER model: {}", GLINER_PII_BACKEND);
         println!("Would run: {}", format_command(&python, &install_args));
         let venv_dir_arg = path_arg(&venv_dir);
         let venv_args = ["-m", "venv", venv_dir_arg.as_str()];
@@ -1781,7 +2046,7 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
         return Ok(());
     }
 
-    println!("Installing GLiNER-PII sidecar dependency...");
+    println!("Downloading GLiNER-PII sidecar dependencies...");
     println!("  {}", format_command(&python, &install_args));
 
     let install_output = std::process::Command::new(&python)
@@ -1837,14 +2102,14 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
             let output_text = render_process_output(&venv_install_output);
             if is_torch_unavailable(&venv_install_output) {
                 bail!(
-                    "GLiNER install failed: torch has no wheel for this Python version.\n\
+                    "GLiNER-PII download/setup failed: torch has no wheel for this Python version.\n\
                      Tip: specify a compatible Python explicitly, e.g.:\n\
-                     cloakpipe ner install --python python3.12\n\n{}",
+                     cloakpipe ner download --model gliner_pii --python python3.12\n\n{}",
                     output_text
                 );
             }
             bail!(
-                "GLiNER install failed in the local virtualenv.\n{}",
+                "GLiNER-PII download/setup failed in the local virtualenv.\n{}",
                 output_text
             );
         }
@@ -1852,7 +2117,7 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
         venv_python
     } else {
         bail!(
-            "GLiNER install failed.\n{}",
+            "GLiNER-PII download/setup failed.\n{}",
             render_process_output(&install_output)
         );
     };
@@ -1861,7 +2126,7 @@ fn install_gliner_pii(python: Option<String>, dry_run: bool, no_verify: bool) ->
         verify_gliner_import(&install_python)?;
     }
 
-    println!("Installed {} successfully.", GLINER_PIP_PACKAGE);
+    println!("Downloaded {} runtime successfully.", GLINER_PIP_PACKAGE);
     if no_verify {
         println!("Skipped import verification (--no-verify).");
     }
@@ -2063,7 +2328,7 @@ fn ensure_gliner_import_available(python: &Path) -> Result<()> {
 
     if !verify_output.status.success() {
         bail!(
-            "Python at {} cannot import gliner. Run `cloakpipe ner install` first or pass --python <path>.\n{}",
+            "Python at {} cannot import gliner. Run `cloakpipe ner download --model gliner_pii` first or pass --python <path>.\n{}",
             python.display(),
             render_process_output(&verify_output)
         );
