@@ -86,6 +86,9 @@ enum Commands {
         /// Minimum confidence threshold (0.0–1.0)
         #[arg(long, default_value = "0.5")]
         min_confidence: f64,
+        /// Disable NER detection for this scan
+        #[arg(long)]
+        no_ner: bool,
     },
     /// Restore a masked file or directory using exported vault mappings
     Restore {
@@ -288,7 +291,19 @@ async fn main() -> anyhow::Result<()> {
             strategy,
             detect_only,
             min_confidence,
-        } => commands::scan(config, input, output, strategy, detect_only, min_confidence).await,
+            no_ner,
+        } => {
+            commands::scan(
+                config,
+                input,
+                output,
+                strategy,
+                detect_only,
+                min_confidence,
+                no_ner,
+            )
+            .await
+        }
         Commands::Restore {
             input,
             output,
@@ -317,5 +332,18 @@ mod tests {
                 action: PolicyCommands::Edit
             }
         ));
+    }
+
+    #[test]
+    fn scan_no_ner_flag_parses() {
+        let cli = Cli::parse_from([
+            "cloakpipe",
+            "scan",
+            "assets/example.md",
+            "--detect-only",
+            "--no-ner",
+        ]);
+
+        assert!(matches!(cli.command, Commands::Scan { no_ner: true, .. }));
     }
 }

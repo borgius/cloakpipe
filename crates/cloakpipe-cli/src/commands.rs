@@ -2508,8 +2508,13 @@ pub async fn scan(
     strategy: String,
     detect_only: bool,
     min_confidence: f64,
+    no_ner: bool,
 ) -> Result<()> {
-    let config = load_resolved_config(config_path)?.config;
+    let mut config = load_resolved_config(config_path)?.config;
+    if no_ner {
+        config.detection.ner.enabled = false;
+    }
+    let ner_enabled = config.detection.ner.enabled;
 
     let detector = Detector::from_config(&config.detection)?;
     let masking_strategy = match strategy.as_str() {
@@ -2604,6 +2609,14 @@ pub async fn scan(
     println!("  Total entities: {}", total_entities);
     println!("  Strategy:       {}", strategy);
     println!("  Min confidence: {:.0}%", min_confidence * 100.0);
+    println!(
+        "  NER:            {}",
+        if ner_enabled {
+            "enabled (pass --no-ner to disable)"
+        } else {
+            "disabled"
+        }
+    );
 
     if let Some(ref out_dir) = output_dir {
         // Save vault mappings as JSON for rehydration

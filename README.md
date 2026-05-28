@@ -322,6 +322,9 @@ cloakpipe scan "Dr. Rajesh Singh, Aadhaar 2345 6789 0123"
 cloakpipe mask "Contact Priya at priya@example.com or +91 98765 43210"
 # Output: "Contact PERSON_001 at chris.hall@gmail.com or +91 464 316 6112"
 
+# NER is enabled by default. Disable it for a scan with --no-ner.
+cloakpipe scan assets/example.md --no-ner
+
 # Start the proxy server
 cloakpipe start
 

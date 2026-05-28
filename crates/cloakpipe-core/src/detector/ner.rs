@@ -12,7 +12,7 @@ use crate::config::NerConfig;
 use crate::paths;
 use crate::{DetectedEntity, DetectionSource, EntityCategory};
 use anyhow::Result;
-use ort::session::Session;
+use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Value;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
@@ -58,6 +58,8 @@ impl NerDetector {
             .map_err(|e| anyhow::anyhow!("Failed to create session builder: {}", e))?
             .with_intra_threads(2)
             .map_err(|e| anyhow::anyhow!("Failed to set threads: {}", e))?
+            .with_optimization_level(GraphOptimizationLevel::Level1)
+            .map_err(|e| anyhow::anyhow!("Failed to set optimization level: {}", e))?
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load ONNX model '{}': {}", model_path, e))?;
 

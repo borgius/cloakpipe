@@ -198,3 +198,25 @@ fn test_scan_sample_masks_documented_leaks() {
     let restored = fs::read_to_string(restored_path).unwrap();
     assert_eq!(restored, original, "restored sample should match original");
 }
+
+#[test]
+fn test_scan_can_disable_ner_with_flag() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cloakpipe"))
+        .current_dir(&workspace)
+        .env("CLOAKPIPE_HOME", dir.path().join("global"))
+        .args(["scan", "assets/example.md", "--detect-only", "--no-ner"])
+        .output()
+        .expect("failed to run cloakpipe");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "scan should succeed with --no-ner: {stderr}"
+    );
+    assert!(stdout.contains("Files scanned:  1"));
+    assert!(stdout.contains("NER:            disabled"));
+}
