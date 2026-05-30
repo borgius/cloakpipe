@@ -1,0 +1,35 @@
+{
+  "name": "cloakpipe",
+  "version": "0.18.0",
+  "description": "Serve the self-hosted CloakPipe admin UI and reverse-proxy a local CloakPipe server-mode instance. Run: npx cloakpipe serve",
+  "type": "module",
+  "bin": {
+    "cloakpipe": "bin/cloakpipe.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "public"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-admin-ui.mjs",
+    "prepack": "node ../../scripts/build-admin-ui.mjs",
+    "test": "node --test"
+  },
+  "keywords": [
+    "cloakpipe",
+    "pii",
+    "privacy",
+    "admin",
+    "proxy"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/borgius/cloakpipe.git",
+    "directory": "packages/cloakpipe-serve"
+  }
+}
