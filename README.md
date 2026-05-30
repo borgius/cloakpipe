@@ -536,17 +536,34 @@ Vault & Secrets · Sessions.
 | `VITE_CLOAKPIPE_BASE_URL` | SPA (dev/build) | same-origin           | Backend base URL for the SPA.              |
 | `CLOAKPIPE_BASE_URL`      | `cloakpipe serve` | `http://127.0.0.1:8400` | Backend to reverse-proxy.                |
 | `PORT` / `HOST`           | `cloakpipe serve` | `8420` / `127.0.0.1`  | Where the admin UI server listens.         |
+| `CLOAKPIPE_ADMIN_TOKEN`   | server          | _unset_               | Optional bearer token guarding `/admin/api/*`. |
+
+**Optional admin authentication:**
+
+Set `CLOAKPIPE_ADMIN_TOKEN` (or point `proxy.admin_token_env` at a different env
+var) when starting the server to require a bearer token on every `/admin/api/*`
+request. When unset, the admin API is unauthenticated (trusted/local default). In
+the UI, supply the token via the **Admin token** control in the sidebar; it is sent
+as an `Authorization` bearer header and stored in the browser's `localStorage`.
+
+**Custom profiles:**
+
+In addition to the built-in industry templates, you can create, update, and delete
+**user-defined custom profiles** from the Profiles page. They are persisted as JSON
+under the profiles directory (`<config-dir>/profiles` by default) and can be
+activated like any built-in. Built-in profile names are reserved.
 
 **Limitations & security:**
 
-- ⚠️ **No built-in authentication.** The admin API can read/modify policies and
-  reveal vault secrets. It is intended for **trusted/local** deployments — bind to
-  `127.0.0.1` (default) or front it with an authenticating reverse proxy. Do **not**
-  expose `/admin/api/*` to untrusted networks.
+- ⚠️ **Authentication is optional and off by default.** The admin API can
+  read/modify policies and reveal vault secrets. Set `CLOAKPIPE_ADMIN_TOKEN` to
+  require a bearer token, bind to `127.0.0.1` (default), and/or front it with an
+  authenticating reverse proxy. Do **not** expose an unauthenticated
+  `/admin/api/*` to untrusted networks.
 - Vault originals are **redacted by default**; revealing them requires explicit
   confirmation and writes an audit event.
-- Audit querying is fully supported on the **SQLite** backend; the **JSONL** backend
-  is best-effort and a **disabled** backend returns a clear unsupported state.
+- Audit querying is supported on both the **SQLite** and **JSONL** backends; a
+  **disabled** backend returns a clear unsupported state.
 - Listener/upstream/masking changes from a policy require a **restart**; detection
   settings apply live.
 - This UI targets **self-hosted/local** CloakPipe and is independent of CloakPipe

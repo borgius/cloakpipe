@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
-import { BASE_URL } from '../api/client';
+import { BASE_URL, getAdminToken, setAdminToken } from '../api/client';
 
 const NAV = [
   { to: '/', label: 'Overview', exact: true },
@@ -10,6 +11,51 @@ const NAV = [
   { to: '/vault', label: 'Vault & Secrets' },
   { to: '/sessions', label: 'Sessions' },
 ];
+
+function AdminTokenControl() {
+  const [token, setToken] = useState(getAdminToken() ?? '');
+  const [saved, setSaved] = useState(false);
+
+  function apply() {
+    setAdminToken(token);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1500);
+  }
+
+  return (
+    <details className="token-control">
+      <summary className="muted" style={{ fontSize: 11, padding: '8px 12px', cursor: 'pointer' }}>
+        Admin token {getAdminToken() ? '✓' : ''}
+      </summary>
+      <div style={{ padding: '4px 12px 8px' }}>
+        <input
+          type="password"
+          value={token}
+          placeholder="******"
+          aria-label="Admin token"
+          onChange={(e) => setToken(e.target.value)}
+          style={{ width: '100%', fontSize: 12 }}
+        />
+        <div className="row" style={{ marginTop: 6 }}>
+          <button className="btn sm" onClick={apply}>
+            {saved ? 'Saved' : 'Save'}
+          </button>
+          {getAdminToken() && (
+            <button
+              className="btn sm"
+              onClick={() => {
+                setAdminToken(null);
+                setToken('');
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
 
 export function RootLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -35,6 +81,7 @@ export function RootLayout() {
           );
         })}
         <div className="spacer" />
+        <AdminTokenControl />
         <div className="muted" style={{ fontSize: 11, padding: '8px 12px' }}>
           {BASE_URL ? (
             <>

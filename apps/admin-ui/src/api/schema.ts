@@ -45,10 +45,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List built-in industry profiles */
+        /** List built-in and custom profiles */
         get: operations["listProfiles"];
         put?: never;
-        post?: never;
+        /** Create a user-defined custom profile (persisted to disk) */
+        post: operations["createProfile"];
         delete?: never;
         options?: never;
         head?: never;
@@ -64,9 +65,11 @@ export interface paths {
         };
         /** Get one profile's detection config */
         get: operations["getProfile"];
-        put?: never;
+        /** Update an existing custom profile */
+        put: operations["updateProfile"];
         post?: never;
-        delete?: never;
+        /** Delete a custom profile */
+        delete: operations["deleteProfile"];
         options?: never;
         head?: never;
         patch?: never;
@@ -81,7 +84,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Activate a built-in profile (applies detection live) */
+        /** Activate a built-in or custom profile (applies detection live) */
         post: operations["activateProfile"];
         delete?: never;
         options?: never;
@@ -350,6 +353,8 @@ export interface components {
             active_profile: string | null;
             config_path: string | null;
             policies_dir: string | null;
+            profiles_dir: string | null;
+            auth_required: boolean;
             masking_strategy: string;
             detection: components["schemas"]["DetectionSummary"];
             ner: components["schemas"]["NerSummary"];
@@ -370,8 +375,16 @@ export interface components {
             name: string;
             kind: string;
             active: boolean;
+            description: string;
             detection: components["schemas"]["DetectionConfig"];
             warnings: string[];
+        };
+        /** @description Payload for creating or updating a user-defined custom profile. */
+        CustomProfileInput: {
+            /** @description Profile name. Required when creating; ignored on update (taken from the path). */
+            name?: string | null;
+            description?: string;
+            detection: components["schemas"]["DetectionConfig"];
         };
         PolicySummary: {
             name: string;
@@ -559,6 +572,32 @@ export interface operations {
             };
         };
     };
+    createProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomProfileInput"];
+            };
+        };
+        responses: {
+            /** @description Created profile */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
     getProfile: {
         parameters: {
             query?: never;
@@ -579,6 +618,58 @@ export interface operations {
                     "application/json": components["schemas"]["ProfileDetail"];
                 };
             };
+            404: components["responses"]["Error"];
+        };
+    };
+    updateProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["Name"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomProfileInput"];
+            };
+        };
+        responses: {
+            /** @description Updated profile */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileDetail"];
+                };
+            };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    deleteProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: components["parameters"]["Name"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deletion result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            400: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

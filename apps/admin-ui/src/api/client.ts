@@ -5,6 +5,7 @@ export type Schemas = components['schemas'];
 export type SystemStatus = Schemas['SystemStatus'];
 export type ProfileSummary = Schemas['ProfileSummary'];
 export type ProfileDetail = Schemas['ProfileDetail'];
+export type CustomProfileInput = Schemas['CustomProfileInput'];
 export type PolicySummary = Schemas['PolicySummary'];
 export type PolicyDetail = Schemas['PolicyDetail'];
 export type PolicyContent = Schemas['PolicyContent'];
@@ -29,6 +30,42 @@ export const BASE_URL: string =
   (import.meta.env.VITE_CLOAKPIPE_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? '';
 
 const API_PREFIX = '/admin/api';
+
+const ADMIN_TOKEN_STORAGE_KEY = 'cloakpipe.adminToken';
+const scheme = 'Bearer';
+
+/**
+ * The optional admin bearer token. When set, it is attached as an
+ * `Authorization` header on every request and persisted to
+ * localStorage so it survives reloads. The admin API only requires this when
+ * the server is started with `CLOAKPIPE_ADMIN_TOKEN` set.
+ */
+let adminToken: string | null = readStoredToken();
+
+function readStoredToken(): string | null {
+  try {
+    return window.localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function getAdminToken(): string | null {
+  return adminToken;
+}
+
+export function setAdminToken(token: string | null): void {
+  adminToken = token && token.trim() !== '' ? token.trim() : null;
+  try {
+    if (adminToken) {
+      window.localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, adminToken);
+    } else {
+      window.localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage unavailable (e.g. private mode) — keep in-memory only.
+  }
+}
 
 export class ApiError extends Error {
   status: number;
@@ -62,10 +99,13 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query, signal } = options;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (adminToken) headers['Authorization'] = scheme + ' ' + adminToken;
   const res = await fetch(buildUrl(path, query), {
     method,
     signal,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -102,6 +142,17 @@ export const api = {
   activateProfile: (name: string) =>
     apiRequest<ProfileDetail>(`/profiles/${encodeURIComponent(name)}/activate`, {
       method: 'POST',
+    }),
+  createProfile: (input: CustomProfileInput) =>
+    apiRequest<ProfileDetail>('/profiles', { method: 'POST', body: input }),
+  updateProfile: (name: string, input: CustomProfileInput) =>
+    apiRequest<ProfileDetail>(`/profiles/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: input,
+    }),
+  deleteProfile: (name: string) =>
+    apiRequest<Record<string, unknown>>(`/profiles/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
     }),
 
   listPolicies: () => apiRequest<PolicySummary[]>('/policies'),

@@ -70,6 +70,16 @@ export function OverviewPage() {
             <dd>{data.config_path ?? '—'}</dd>
             <dt>Policies dir</dt>
             <dd>{data.policies_dir ?? '—'}</dd>
+            <dt>Profiles dir</dt>
+            <dd>{data.profiles_dir ?? '—'}</dd>
+            <dt>Admin auth</dt>
+            <dd>
+              {data.auth_required ? (
+                <Badge tone="ok">token required</Badge>
+              ) : (
+                <Badge tone="warn">open</Badge>
+              )}
+            </dd>
           </dl>
         </div>
 

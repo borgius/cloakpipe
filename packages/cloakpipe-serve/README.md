@@ -42,8 +42,10 @@ node bin/cloakpipe.mjs serve
 
 ## Security
 
-- **No built-in authentication.** The admin API can read/modify policies and
-  reveal vault secrets. Bind to `127.0.0.1` (default) or place an authenticating
-  reverse proxy in front. Do **not** expose it to untrusted networks.
+- **Authentication is optional.** The admin API can read/modify policies and
+  reveal vault secrets. Start the backend with `CLOAKPIPE_ADMIN_TOKEN` set to
+  require a bearer token on `/admin/api/*`, bind to `127.0.0.1` (default), and/or
+  place an authenticating reverse proxy in front. Do **not** expose an
+  unauthenticated admin API to untrusted networks.
 - Requires CloakPipe running in **`server`** mode; other modes do not expose
   `/admin/api/*`.

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api } from '../api/client';
+import { ApiError, api, setAdminToken } from '../api/client';
 
 function mockFetch(status: number, body: unknown, contentType = 'application/json') {
   return vi.fn().mockResolvedValue({
@@ -64,5 +64,42 @@ describe('api client', () => {
     expect(url).toContain('event=detect');
     expect(url).toContain('limit=10');
     expect(url).not.toContain('surface=');
+  });
+
+  it('attaches the admin token as an Authorization header when set', async () => {
+    const fetchMock = mockFetch(200, { service: 'cloakpipe', mode: 'server' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tok = 'secret-token';
+    setAdminToken(tok);
+    try {
+      await api.getSystem();
+      const init = fetchMock.mock.calls[0][1];
+      expect(init.headers.Authorization).toBe('Bearer ' + tok);
+    } finally {
+      setAdminToken(null);
+    }
+
+    const fetchMock2 = mockFetch(200, { service: 'cloakpipe', mode: 'server' });
+    vi.stubGlobal('fetch', fetchMock2);
+    await api.getSystem();
+    const init2 = fetchMock2.mock.calls[0][1];
+    expect(init2?.headers?.Authorization).toBeUndefined();
+  });
+
+  it('posts custom profile input on create', async () => {
+    const fetchMock = mockFetch(200, { name: 'x', kind: 'custom', active: false });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.createProfile({ name: 'x', description: 'd', detection: { secrets: true } });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/admin/api/profiles');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'x',
+      description: 'd',
+      detection: { secrets: true },
+    });
   });
 });

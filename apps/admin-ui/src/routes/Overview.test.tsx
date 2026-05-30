@@ -20,6 +20,8 @@ describe('OverviewPage', () => {
       active_profile: 'legal',
       config_path: '/etc/cloakpipe.toml',
       policies_dir: '/etc/policies',
+      profiles_dir: '/etc/profiles',
+      auth_required: true,
       masking_strategy: 'token',
       detection: {
         secrets: true,
@@ -73,6 +75,8 @@ describe('OverviewPage', () => {
       active_profile: null,
       config_path: null,
       policies_dir: null,
+      profiles_dir: null,
+      auth_required: false,
       masking_strategy: 'token',
       detection: {
         secrets: true,

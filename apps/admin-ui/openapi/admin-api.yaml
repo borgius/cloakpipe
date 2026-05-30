@@ -8,9 +8,11 @@ info:
     inspection.
 
 
-    Security note: there is **no built-in authentication**. The admin API is intended for trusted/local
-    operators or to be fronted by an external auth proxy. Some routes expose sensitive data (raw vault
-    mappings) and are redacted by default.
+    Security: the admin API is **unauthenticated by default** and intended for trusted/local operators.
+    Optionally, set the `CLOAKPIPE_ADMIN_TOKEN` environment variable (configurable via
+    `proxy.admin_token_env`) to require a bearer token on every `/admin/api/*` request
+    (`Authorization: ******. You can also front the API with an external auth proxy. Some
+    routes expose sensitive data (raw vault mappings) and are redacted by default.
 
     '
 servers:
@@ -19,6 +21,9 @@ servers:
   variables:
     baseUrl:
       default: http://127.0.0.1:8400
+security:
+- {}
+- bearerAuth: []
 tags:
 - name: system
 - name: profiles
@@ -57,7 +62,7 @@ paths:
     get:
       tags:
       - profiles
-      summary: List built-in industry profiles
+      summary: List built-in and custom profiles
       operationId: listProfiles
       responses:
         '200':
@@ -68,6 +73,28 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ProfileSummary'
+    post:
+      tags:
+      - profiles
+      summary: Create a user-defined custom profile (persisted to disk)
+      operationId: createProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomProfileInput'
+      responses:
+        '200':
+          description: Created profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileDetail'
+        '400':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /profiles/{name}:
     get:
       tags:
@@ -85,11 +112,53 @@ paths:
                 $ref: '#/components/schemas/ProfileDetail'
         '404':
           $ref: '#/components/responses/Error'
+    put:
+      tags:
+      - profiles
+      summary: Update an existing custom profile
+      operationId: updateProfile
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomProfileInput'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags:
+      - profiles
+      summary: Delete a custom profile
+      operationId: deleteProfile
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /profiles/{name}/activate:
     post:
       tags:
       - profiles
-      summary: Activate a built-in profile (applies detection live)
+      summary: Activate a built-in or custom profile (applies detection live)
       operationId: activateProfile
       parameters:
       - $ref: '#/components/parameters/Name'
@@ -416,6 +485,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/MappingsResponse'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: 'Optional admin token. Required only when the server is started with
+        `CLOAKPIPE_ADMIN_TOKEN` (or `proxy.admin_token_env`) set; otherwise the admin API
+        is unauthenticated.'
   parameters:
     Name:
       in: path
@@ -567,6 +643,12 @@ components:
           type:
           - string
           - 'null'
+        profiles_dir:
+          type:
+          - string
+          - 'null'
+        auth_required:
+          type: boolean
         masking_strategy:
           type: string
         detection:
@@ -586,6 +668,8 @@ components:
       - active_profile
       - config_path
       - policies_dir
+      - profiles_dir
+      - auth_required
       - masking_strategy
       - detection
       - ner
@@ -620,6 +704,8 @@ components:
           type: string
         active:
           type: boolean
+        description:
+          type: string
         detection:
           $ref: '#/components/schemas/DetectionConfig'
         warnings:
@@ -630,8 +716,24 @@ components:
       - name
       - kind
       - active
+      - description
       - detection
       - warnings
+    CustomProfileInput:
+      type: object
+      description: Payload for creating or updating a user-defined custom profile.
+      properties:
+        name:
+          type:
+          - string
+          - 'null'
+          description: Profile name. Required when creating; ignored on update (taken from the path).
+        description:
+          type: string
+        detection:
+          $ref: '#/components/schemas/DetectionConfig'
+      required:
+      - detection
     PolicySummary:
       type: object
       properties:
