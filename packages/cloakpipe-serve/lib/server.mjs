@@ -1,7 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MIME = {
@@ -29,15 +29,23 @@ export function shouldProxy(pathname) {
 
 /**
  * Resolve a request path to a safe absolute file inside `root`.
- * Returns null if the resolved path escapes `root` (path traversal).
+ * Returns null if the resolved path escapes `root` (path traversal) or contains
+ * a NUL byte. Uses `path.relative` to confine the result strictly to `root`.
  */
 export function resolveStatic(root, pathname) {
-  const decoded = decodeURIComponent(pathname.split('?')[0]);
-  const candidate = normalize(join(root, decoded));
-  const rootResolved = resolve(root);
-  if (candidate !== rootResolved && !candidate.startsWith(rootResolved + '/')) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname.split('?')[0]);
+  } catch {
     return null;
   }
+  if (decoded.includes('\0')) return null;
+  const rootResolved = resolve(root);
+  // Resolve relative to root so absolute-looking paths cannot escape it.
+  const candidate = resolve(rootResolved, '.' + (decoded.startsWith('/') ? decoded : `/${decoded}`));
+  const rel = relative(rootResolved, candidate);
+  if (rel === '') return candidate;
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
   return candidate;
 }
 
@@ -52,13 +60,27 @@ function serveFile(filePath, res) {
 }
 
 function proxyRequest(req, res, backend) {
-  const target = new URL(req.url, backend);
+  // Pin the target host/protocol/port to the configured backend. Only the
+  // path and query string come from the request, preventing request forgery
+  // via absolute-form request targets (e.g. "GET http://evil/...").
+  const base = new URL(backend);
+  let incoming;
+  try {
+    incoming = new URL(req.url || '/', 'http://internal.invalid');
+  } catch {
+    res.writeHead(400);
+    res.end('Bad request');
+    return;
+  }
+  const target = new URL(base.toString());
+  target.pathname = incoming.pathname;
+  target.search = incoming.search;
+
   const client = target.protocol === 'https:' ? https : http;
   const headers = { ...req.headers, host: target.host };
 
   const proxyReq = client.request(
-    target,
-    { method: req.method, headers },
+    { protocol: target.protocol, hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers },
     (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
       proxyRes.pipe(res);
