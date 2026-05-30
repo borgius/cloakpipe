@@ -12,7 +12,7 @@ Traces every step:
 
 Usage:
   # Terminal 1: python tools/gliner-pii-server.py
-  # Terminal 2: CLOAKPIPE_VAULT_KEY=... OPENAI_API_KEY=... ./target/release/cloakpipe --config benchmarks/test-config.toml start
+    # Terminal 2: CLOAKPIPE_VAULT_KEY=... OPENAI_API_KEY=... ./target/release/cloakpipe --config benchmarks/test-config.toml start llm-proxy
   # Terminal 3: python benchmarks/e2e_quality_test.py
 """
 
@@ -282,7 +282,7 @@ def main():
             raise Exception()
     except Exception:
         print(f"ERROR: CloakPipe proxy not running at {PROXY_URL}")
-        print("Start: ./target/release/cloakpipe --config benchmarks/test-config.toml start")
+        print("Start: ./target/release/cloakpipe --config benchmarks/test-config.toml start llm-proxy")
         sys.exit(1)
 
     print_separator()

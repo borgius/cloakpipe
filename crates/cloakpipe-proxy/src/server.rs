@@ -14,9 +14,8 @@ use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-/// Build the axum router with all routes and middleware.
-pub fn build_router(state: Arc<AppState>) -> Router {
-    let router = Router::new()
+fn build_server_router() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/health", get(handlers::health))
         // Direct privacy endpoints (same request/response shapes as the MCP tools)
         .route("/pseudonymize", post(handlers::api_pseudonymize))
@@ -55,12 +54,21 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/sessions/{id}",
             get(handlers::session_inspect).delete(handlers::session_flush),
-        );
+        )
+}
 
+fn build_llm_proxy_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/health", get(handlers::health))
+        .route("/", any(llm_proxy::proxy_request))
+        .route("/*path", any(llm_proxy::proxy_request))
+}
+
+/// Build the axum router with mode-specific routes and middleware.
+pub fn build_router(state: Arc<AppState>) -> Router {
     let router = match state.config.proxy.mode {
-        ProxyMode::LlmProxy => router
-            .route("/", any(llm_proxy::proxy_request))
-            .route("/*path", any(llm_proxy::proxy_request)),
+        ProxyMode::Server => build_server_router(),
+        ProxyMode::LlmProxy => build_llm_proxy_router(),
         ProxyMode::HttpProxy => Router::new()
             .route("/", any(http_proxy::proxy_request))
             .route("/*path", any(http_proxy::proxy_request))
@@ -90,7 +98,7 @@ pub async fn serve_listener(listener: TcpListener, state: AppState) -> anyhow::R
 
     match state.config.proxy.mode {
         ProxyMode::HttpProxy => serve_http_proxy_listener(listener, state).await,
-        ProxyMode::LlmProxy => {
+        ProxyMode::Server | ProxyMode::LlmProxy => {
             let app = build_router(state);
             axum::serve(listener, app).await?;
             Ok(())

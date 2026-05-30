@@ -18,9 +18,9 @@ Rust-native · <5ms latency · 33+ entity types · 91.7% real-world protection �
 
 ## What is CloakPipe?
 
-CloakPipe is a **high-performance privacy proxy** that sits between your application and supported LLM APIs. It detects PII (personally identifiable information) in your prompts, replaces it with safe tokens, forwards the sanitized request to the LLM, and restores the original values in the response.
+CloakPipe is a **high-performance privacy layer** for LLM traffic and agent integrations. It detects PII (personally identifiable information), replaces it with safe tokens, forwards sanitized proxy traffic when needed, and restores original values in responses.
 
-Today CloakPipe has two server modes: `llm-proxy` for clients that point at CloakPipe directly, and `http-proxy` for explicit `HTTP_PROXY`/`HTTPS_PROXY` forward-proxy usage.
+Today CloakPipe has three start modes: `server` for direct HTTP API plus MCP stdio tools, `llm-proxy` for clients that point at CloakPipe directly, and `http-proxy` for explicit `HTTP_PROXY`/`HTTPS_PROXY` forward-proxy usage.
 
 **The LLM never sees your real data. Your users see natural responses.**
 
@@ -58,27 +58,40 @@ curl -fsSL https://raw.githubusercontent.com/borgius/cloakpipe/refs/heads/main/i
 # Optional direct cargo install from borgius/cloakpipe
 cargo install --git https://github.com/borgius/cloakpipe --bin cloakpipe cloakpipe-cli
 
-# Start the proxy
-cloakpipe start
+# Start the direct LLM proxy
+cloakpipe start llm-proxy
 ```
 
 The installer initializes a global CloakPipe home at `~/.cloakpipe` without overwriting existing files. It creates `~/.cloakpipe/cloakpipe.toml`, `~/.cloakpipe/policies/`, and `~/.cloakpipe/models/`. The requested misspellings `~/.cloackpipe` and `cloackpipe.toml` are accepted as compatibility aliases; canonical docs and generated files use `cloakpipe`.
 
-### Choose a proxy mode
+### Choose a start mode
 
-CloakPipe currently has two server modes.
+CloakPipe requires an explicit mode when starting.
 
 | Mode | Best for | What the client changes | Upstream auth |
 |---|---|---|---|
+| `server` | Direct privacy APIs and MCP agent integrations | Call CloakPipe API endpoints directly, or configure an MCP client to run `cloakpipe start server` | No upstream auth for direct API/MCP tools; upstream-backed tree routes still use `proxy.api_key_env` |
 | `llm-proxy` | Apps and SDKs that can point at CloakPipe directly | Point the SDK or app at CloakPipe paths such as `http://localhost:<port>/v1` or `/anthropic` | `pass-through` by default; set `auth_mode = "server-key"` to make CloakPipe inject `proxy.api_key_env` |
 | `http-proxy` | Apps that support `HTTP_PROXY` or `HTTPS_PROXY` | Keep the SDK/app pointed at the real provider and set proxy environment variables | `pass-through` by default; set `auth_mode = "server-key"` when a bearer-token upstream should come from CloakPipe |
 
-Two important points:
+Three important points:
 
+- `server` exposes only the direct CloakPipe HTTP API and MCP stdio tools. It does not proxy LLM chat/embedding requests.
 - `llm-proxy` replaces the removed `proxy` mode. If you used the old single-upstream OpenAI-compatible setup, keep the same base-URL override and set `auth_mode = "server-key"`.
+- `llm-proxy` is now proxy-only. Direct API endpoints such as `/pseudonymize` and `/v1/detect` live in `server` mode.
 - `http-proxy` is the transparent network-proxy mode. Plain HTTP traffic can be inspected and mutated. HTTPS traffic uses CONNECT; by default it is tunneled unchanged, and opt-in HTTPS inspection is available for known or allowlisted LLM hosts after you install a local CloakPipe CA.
 
-#### Mode 1: `llm-proxy`
+#### Mode 1: `server` API and MCP tools
+
+Use `server` when you want CloakPipe's direct privacy API endpoints or MCP tools without proxying LLM provider traffic.
+
+```bash
+cloakpipe start server
+```
+
+This mode exposes HTTP endpoints such as `/v1/pseudonymize`, `/v1/rehydrate`, `/v1/detect`, `/v1/vault_stats`, `/v1/configure`, `/v1/session_context`, `/tree/...`, and `/sessions/...`. It also starts the stdio MCP server used by agent integrations. It does **not** register the catch-all LLM proxy route.
+
+#### Mode 2: `llm-proxy`
 
 Use `llm-proxy` when your client can point at CloakPipe. It covers the old `proxy` mode and adds multi-provider raw HTTP routing.
 
@@ -99,7 +112,7 @@ anthropic = "https://api.anthropic.com"
 
 How to use it:
 
-1. Start CloakPipe with `mode = "llm-proxy"`.
+1. Start CloakPipe with `cloakpipe start llm-proxy`.
 2. Point the client at CloakPipe, not at the real provider.
 3. For OpenAI-compatible clients, use CloakPipe as the base URL. `llm-proxy` accepts both `/v1/...` and `/chat/...` style paths.
 4. For Anthropic clients, use `http://127.0.0.1:8900/anthropic` as the base URL so the SDK's `/v1/messages` request becomes `/anthropic/v1/messages` at CloakPipe.
@@ -124,7 +137,7 @@ What `llm-proxy` does **not** do yet:
 - It does not work as a transparent network proxy via `HTTP_PROXY` or `HTTPS_PROXY`.
 - It does not accept arbitrary provider prefixes today. The built-in routing currently covers OpenAI-compatible paths and Anthropic-prefixed traffic.
 
-#### Mode 2: `http-proxy` (transparent forward proxy)
+#### Mode 3: `http-proxy` (transparent forward proxy)
 
 Use `http-proxy` when you do **not** want to change application code or SDK base URLs. Your app stays pointed at the real provider, and you configure standard proxy environment variables instead.
 
@@ -149,7 +162,7 @@ allowed_hosts = ["api.openai.com", "api.anthropic.com"]
 
 How to use it:
 
-1. Start CloakPipe with `mode = "http-proxy"`.
+1. Start CloakPipe with `cloakpipe start http-proxy`.
 2. Leave your SDK or app configured for the real provider URL, such as `https://api.openai.com/v1`.
 3. Set proxy environment variables for the app process:
 
@@ -479,11 +492,11 @@ cloakpipe mask "Contact Priya at priya@example.com or +91 98765 43210"
 # NER is enabled by default. Disable it for a scan with --no-ner.
 cloakpipe scan assets/example.md --no-ner
 
-# Start the proxy server
-cloakpipe start
+# Start the direct LLM proxy server
+cloakpipe start llm-proxy
 
 # Start with a specific bundled policy config
-cloakpipe --config policies/dpdp.toml start
+cloakpipe --config policies/dpdp.toml start llm-proxy
 
 # Check proxy health
 cloakpipe health
@@ -506,7 +519,7 @@ CLOAKPIPE_UPSTREAM_URL=https://api.openai.com  # Default upstream LLM API
 CLOAKPIPE_TIMEOUT=30                   # Request timeout in seconds
 
 # Detection
-# Select a bundled policy with: cloakpipe --config policies/dpdp.toml start
+# Select a bundled policy with: cloakpipe --config policies/dpdp.toml start llm-proxy
 CLOAKPIPE_MIN_CONFIDENCE=0.8          # Minimum NER confidence threshold (0.0–1.0)
 
 # Global CloakPipe home
@@ -529,7 +542,7 @@ If you omit `--config`, CloakPipe searches from the current directory upward for
 CloakPipe ships framework-specific policy presets as full `cloakpipe.toml`-compatible files in [`policies/`](policies/). Use them with the global `--config` flag:
 
 ```bash
-cloakpipe --config policies/dpdp.toml start
+cloakpipe --config policies/dpdp.toml start llm-proxy
 ```
 
 Create or edit the active policy interactively with:

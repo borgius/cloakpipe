@@ -379,10 +379,10 @@ Current routes:
 - `POST /tree/query`
 - `DELETE /tree/{id}`
 
-### Start the proxy
+### Start the server
 
 ```bash
-cloakpipe start
+cloakpipe start server
 ```
 
 ### Build an index from a server-side file path

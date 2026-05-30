@@ -16,7 +16,7 @@ cargo install --git https://github.com/borgius/cloakpipe --bin cloakpipe cloakpi
 Two quick notes before you copy old examples from elsewhere:
 
 - The current tree routes live under `/tree/...`, not `/v1/tree/...`.
-- The current CLI command to start the server is `cloakpipe start`, not `cloakpipe serve`.
+- The current CLI command requires an explicit mode: `cloakpipe start server`, `cloakpipe start llm-proxy`, or `cloakpipe start http-proxy`.
 
 ## Before you call the API
 
@@ -34,16 +34,33 @@ So the examples in this document use:
 
 - `http://127.0.0.1:8900`
 
-### Proxy modes
+### Start modes
 
-`[proxy].mode` decides which LLM handler is active.
+The `cloakpipe start <mode>` argument decides which runtime surface is active. The selected mode overrides `[proxy].mode` from the loaded config for that process.
 
-- `mode = "llm-proxy"` enables the direct multi-provider proxy for clients that point at CloakPipe.
-- `mode = "http-proxy"` enables an explicit forward proxy for clients configured with `HTTP_PROXY` or `HTTPS_PROXY`.
+- `server` exposes direct CloakPipe HTTP API endpoints and starts the stdio MCP tools. It does not register LLM proxy routes.
+- `llm-proxy` enables the direct multi-provider proxy for clients that point at CloakPipe.
+- `http-proxy` enables an explicit forward proxy for clients configured with `HTTP_PROXY` or `HTTPS_PROXY`.
 
 The old `mode = "proxy"` value was removed. To replace that behavior, use `mode = "llm-proxy"` with `auth_mode = "server-key"`.
 
 Minimal examples:
+
+```bash
+cloakpipe start server
+cloakpipe start llm-proxy
+cloakpipe start http-proxy
+```
+
+Config examples:
+
+```toml
+[proxy]
+listen = "127.0.0.1:8900"
+upstream = "https://api.openai.com"
+mode = "server"
+masking_strategy = "similar"
+```
 
 ```toml
 [proxy]
@@ -212,29 +229,27 @@ If you are building a client, treat error bodies as opaque text unless you know 
 
 | Path | Method | Purpose |
 | --- | --- | --- |
-| `/health` | `GET` | Liveness check |
-| `/v1/pseudonymize` or `/pseudonymize` | `POST` | Direct MCP-style text pseudonymization |
-| `/v1/rehydrate` or `/rehydrate` | `POST` | Direct MCP-style token rehydration |
-| `/v1/detect` or `/detect` | `POST` | Direct MCP-style dry-run detection |
-| `/v1/vault_stats` or `/vault_stats` | `GET`, `POST` | Direct MCP-style vault stats |
-| `/v1/configure` or `/configure` | `POST` | Direct MCP-style detector reconfiguration |
-| `/v1/session_context` or `/session_context` | `POST` | Direct MCP-style session inspection |
-| `/v1/chat/completions` | `POST` | Pseudonymize chat input, proxy upstream, then rehydrate the response |
-| `/v1/embeddings` | `POST` | Pseudonymize embedding input, proxy upstream |
-| `/*path` (when `proxy.mode = "llm-proxy"`) | `ANY` | Raw multi-provider LLM proxy with request mutation and response rehydration |
-| Absolute-form `http://...` (when `proxy.mode = "http-proxy"`) | `ANY` | Explicit forward-proxy HTTP request with request mutation and response rehydration |
-| Authority-form `CONNECT host:port` (when `proxy.mode = "http-proxy"`) | `CONNECT` | HTTPS tunnel relay by default; opt-in local-CA MITM for known/allowlisted LLM hosts when `inspect_https = true` |
-| `/tree/index` | `POST` | Build and save a tree index from raw text |
-| `/tree/index/file` | `POST` | Build and save a tree index from a file path on the server |
-| `/tree/list` | `GET` | List saved tree indices |
-| `/tree/query` | `POST` | One-shot tree load or build, search, and answer generation |
-| `/tree/{id}` | `GET` | Fetch one saved tree and its navigation map |
-| `/tree/{id}` | `DELETE` | Delete one saved tree |
-| `/tree/{id}/search` | `POST` | Search one saved tree |
-| `/sessions` | `GET` | List active session stats |
-| `/sessions` | `DELETE` | Flush all sessions |
-| `/sessions/{id}` | `GET` | Inspect one session's stats |
-| `/sessions/{id}` | `DELETE` | Flush one session |
+| `/health` | `GET` | Liveness check in `server` and `llm-proxy` modes |
+| `/v1/pseudonymize` or `/pseudonymize` | `POST` | Direct MCP-style text pseudonymization in `server` mode |
+| `/v1/rehydrate` or `/rehydrate` | `POST` | Direct MCP-style token rehydration in `server` mode |
+| `/v1/detect` or `/detect` | `POST` | Direct MCP-style dry-run detection in `server` mode |
+| `/v1/vault_stats` or `/vault_stats` | `GET`, `POST` | Direct MCP-style vault stats in `server` mode |
+| `/v1/configure` or `/configure` | `POST` | Direct MCP-style detector reconfiguration in `server` mode |
+| `/v1/session_context` or `/session_context` | `POST` | Direct MCP-style session inspection in `server` mode |
+| `/*path` (when started as `llm-proxy`) | `ANY` | Raw multi-provider LLM proxy with request mutation and response rehydration |
+| Absolute-form `http://...` (when started as `http-proxy`) | `ANY` | Explicit forward-proxy HTTP request with request mutation and response rehydration |
+| Authority-form `CONNECT host:port` (when started as `http-proxy`) | `CONNECT` | HTTPS tunnel relay by default; opt-in local-CA MITM for known/allowlisted LLM hosts when `inspect_https = true` |
+| `/tree/index` | `POST` | Build and save a tree index from raw text in `server` mode |
+| `/tree/index/file` | `POST` | Build and save a tree index from a file path on the server in `server` mode |
+| `/tree/list` | `GET` | List saved tree indices in `server` mode |
+| `/tree/query` | `POST` | One-shot tree load or build, search, and answer generation in `server` mode |
+| `/tree/{id}` | `GET` | Fetch one saved tree and its navigation map in `server` mode |
+| `/tree/{id}` | `DELETE` | Delete one saved tree in `server` mode |
+| `/tree/{id}/search` | `POST` | Search one saved tree in `server` mode |
+| `/sessions` | `GET` | List active session stats in `server` mode |
+| `/sessions` | `DELETE` | Flush all sessions in `server` mode |
+| `/sessions/{id}` | `GET` | Inspect one session's stats in `server` mode |
+| `/sessions/{id}` | `DELETE` | Flush one session in `server` mode |
 
 ## LLM proxy endpoints
 
@@ -496,7 +511,7 @@ When the body changes, CloakPipe strips stale `content-length` and `transfer-enc
 
 ## Direct privacy tool endpoints
 
-These routes mirror the six MCP tools over HTTP.
+These routes are active in `server` mode and mirror the six MCP tools over HTTP.
 
 Two practical notes:
 

@@ -611,11 +611,12 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-/// Start the proxy server.
-pub async fn start(config_path: Option<&str>) -> Result<()> {
+/// Start the selected CloakPipe server mode.
+pub async fn start(config_path: Option<&str>, mode: crate::StartMode) -> Result<()> {
     let resolved = load_resolved_config(config_path)?;
     log_resolved_config(&resolved);
-    let config = resolved.config;
+    let mut config = resolved.config;
+    config.proxy.mode = mode.into();
     preflight_http_proxy_config(&config)?;
     let key = resolve_vault_key(&config)?;
     let detector = Detector::from_config(&config.detection)?;
@@ -624,13 +625,52 @@ pub async fn start(config_path: Option<&str>) -> Result<()> {
     let api_key = resolve_proxy_api_key(&config);
 
     tracing::info!(
+        mode = ?config.proxy.mode,
         listen = %config.proxy.listen,
         upstream = %config.proxy.upstream,
-        "Starting CloakPipe proxy"
+        "Starting CloakPipe server"
     );
 
     let state = AppState::try_new(config, detector, vault, audit, api_key)?;
-    server::start(state).await
+    if matches!(state.config.proxy.mode, ProxyMode::Server) {
+        start_api_and_mcp_server(state).await
+    } else {
+        server::start(state).await
+    }
+}
+
+async fn start_api_and_mcp_server(state: AppState) -> Result<()> {
+    let mcp_detector = state.detector.clone();
+    let mcp_vault = state.vault.clone();
+    let mcp_detection_config = state.detection_config.clone();
+    let mcp_active_profile = state.active_profile.clone();
+    let mcp_sessions = state.sessions.clone();
+    let mcp_audit = state.audit.clone();
+
+    let mut http_task = tokio::spawn(server::start(state));
+    let mut mcp_task = tokio::spawn(cloakpipe_mcp::serve_stdio_shared(
+        mcp_detector,
+        mcp_vault,
+        mcp_detection_config,
+        mcp_active_profile,
+        mcp_sessions,
+        mcp_audit,
+    ));
+
+    tokio::select! {
+        http_result = &mut http_task => {
+            mcp_task.abort();
+            http_result.context("CloakPipe API server task panicked")?
+        }
+        mcp_result = &mut mcp_task => {
+            match mcp_result.context("CloakPipe MCP server task panicked")? {
+                Ok(()) => tracing::info!("CloakPipe MCP stdio server exited"),
+                Err(error) => tracing::warn!("CloakPipe MCP stdio server exited: {error}"),
+            }
+
+            http_task.await.context("CloakPipe API server task panicked")?
+        }
+    }
 }
 
 /// Test detection on sample text.
@@ -727,8 +767,8 @@ pub async fn init() -> Result<()> {
     println!("\nNext steps:");
     println!("  1. Set OPENAI_API_KEY (or your upstream API key)");
     println!("  2. Set CLOAKPIPE_VAULT_KEY (64-char hex string for encryption)");
-    println!("  3. Run: cloakpipe start");
-    println!("  4. Or run a bundled preset directly: cloakpipe --config dpdp.toml start");
+    println!("  3. Run: cloakpipe start llm-proxy");
+    println!("  4. Or run a bundled preset directly: cloakpipe --config dpdp.toml start llm-proxy");
 
     Ok(())
 }
@@ -1010,7 +1050,7 @@ pub async fn presets(action: crate::PresetCommands) -> Result<()> {
                 println!("  {} — {}", preset.file_name, preset.description);
             }
             println!("\nUse them with:");
-            println!("  cloakpipe --config dpdp.toml start");
+            println!("  cloakpipe --config dpdp.toml start llm-proxy");
         }
         crate::PresetCommands::List => {
             let preset_dir = installed_preset_dir()?;
@@ -1729,8 +1769,8 @@ pub async fn setup() -> Result<()> {
     println!("\nNext steps:");
     println!("  1. Set {} (your API key)", api_key_env);
     println!("  2. Set CLOAKPIPE_VAULT_KEY=$(openssl rand -hex 32)");
-    println!("  3. Run: cloakpipe start");
-    println!("  4. Or use a bundled preset: cloakpipe --config dpdp.toml start");
+    println!("  3. Run: cloakpipe start llm-proxy");
+    println!("  4. Or use a bundled preset: cloakpipe --config dpdp.toml start llm-proxy");
 
     Ok(())
 }
@@ -2726,18 +2766,6 @@ mod tests {
             std::env::set_current_dir(&self.previous).unwrap();
         }
     }
-}
-
-/// Start as MCP server (stdio transport).
-pub async fn mcp(config_path: Option<&str>) -> Result<()> {
-    let config = load_resolved_config(config_path)?.config;
-
-    let key = resolve_vault_key(&config)?;
-    let vault = cloakpipe_core::vault::Vault::open(&config.vault.path, key)?;
-    let detector = cloakpipe_core::detector::Detector::from_config(&config.detection)?;
-    let audit = AuditSink::from_config(&config.audit)?;
-
-    cloakpipe_mcp::serve_stdio(config, detector, vault, audit).await
 }
 
 /// CloakTree commands — vectorless document retrieval.

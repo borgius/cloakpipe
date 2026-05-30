@@ -388,8 +388,9 @@ New in v2: **OS keyring integration** via `keyring` crate (macOS Keychain, Linux
 
 ### 7. Proxy Server (`cloakpipe-proxy`)
 
-The proxy layer has two server modes:
+The proxy layer has three start modes:
 
+- `server`: direct HTTP API routes plus stdio MCP tools. It does not register the catch-all LLM proxy routes.
 - `llm-proxy`: raw multi-provider HTTP routing for clients that point at CloakPipe directly. Provider auth is usually passed through, but `auth_mode = "server-key"` replaces the removed legacy `proxy` behavior.
 - `http-proxy`: explicit forward proxy for apps configured with `HTTP_PROXY` or `HTTPS_PROXY`. Apps keep their real provider URLs.
 

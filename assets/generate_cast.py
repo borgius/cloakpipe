@@ -174,7 +174,7 @@ def main():
         "Next steps:\r\n"
         "  1. Set OPENAI_API_KEY (or your upstream API key)\r\n"
         "  2. Set CLOAKPIPE_VAULT_KEY=$(openssl rand -hex 32)\r\n"
-        "  3. Run: cloakpipe start\r\n"
+        "  3. Run: cloakpipe start llm-proxy\r\n"
     )
     for line in init_out.split("\r\n"):
         events.append((t, "o", line + "\r\n"))
@@ -185,7 +185,7 @@ def main():
     events.append((t, "o", "\r\n"))
     t += 0.2
 
-    e, t = type_cmd(t, "cloakpipe start")
+    e, t = type_cmd(t, "cloakpipe start llm-proxy")
     events.extend(e)
     t += 0.5
 

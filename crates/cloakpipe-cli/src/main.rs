@@ -4,6 +4,7 @@ mod commands;
 mod presets;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use cloakpipe_core::config::ProxyMode;
 
 #[derive(Parser)]
 #[command(name = "cloakpipe")]
@@ -21,8 +22,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the CloakPipe proxy server
-    Start,
+    /// Start a CloakPipe server mode
+    Start {
+        /// Runtime mode to launch
+        #[arg(value_enum)]
+        mode: StartMode,
+    },
     /// Test detection on sample text
     Test {
         /// Text to test detection on
@@ -48,8 +53,6 @@ enum Commands {
         #[command(subcommand)]
         action: PolicyCommands,
     },
-    /// Start as an MCP server (for agent integrations)
-    Mcp,
     /// CloakTree: vectorless document retrieval
     Tree {
         #[command(subcommand)]
@@ -169,6 +172,25 @@ pub enum NerCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum StartMode {
+    Server,
+    #[value(alias = "llm-http", alias = "llm_http", alias = "llm_proxy")]
+    LlmProxy,
+    #[value(alias = "http_proxy")]
+    HttpProxy,
+}
+
+impl From<StartMode> for ProxyMode {
+    fn from(mode: StartMode) -> Self {
+        match mode {
+            StartMode::Server => Self::Server,
+            StartMode::LlmProxy => Self::LlmProxy,
+            StartMode::HttpProxy => Self::HttpProxy,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -333,14 +355,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match cli.command {
-        Commands::Start => commands::start(config).await,
+        Commands::Start { mode } => commands::start(config, mode).await,
         Commands::Test { text, file } => commands::test(config, text, file).await,
         Commands::Stats => commands::stats(config).await,
         Commands::Init => commands::init().await,
         Commands::Setup => commands::setup().await,
         Commands::Presets { action } => commands::presets(action).await,
         Commands::Policy { action } => commands::policy(config, action).await,
-        Commands::Mcp => commands::mcp(config).await,
         Commands::Tree { action } => commands::tree(config, action).await,
         Commands::Vector { action } => commands::vector(action).await,
         Commands::Sessions { action } => commands::sessions(config, action).await,
@@ -391,6 +412,47 @@ mod tests {
             cli.command,
             Commands::Policy {
                 action: PolicyCommands::Edit
+            }
+        ));
+    }
+
+    #[test]
+    fn start_command_requires_mode() {
+        assert!(Cli::try_parse_from(["cloakpipe", "start"]).is_err());
+    }
+
+    #[test]
+    fn start_command_parses_server_mode() {
+        let cli = Cli::parse_from(["cloakpipe", "start", "server"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Start {
+                mode: StartMode::Server
+            }
+        ));
+    }
+
+    #[test]
+    fn start_command_parses_llm_proxy_alias() {
+        let cli = Cli::parse_from(["cloakpipe", "start", "llm_http"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Start {
+                mode: StartMode::LlmProxy
+            }
+        ));
+    }
+
+    #[test]
+    fn start_command_parses_http_proxy_mode() {
+        let cli = Cli::parse_from(["cloakpipe", "start", "http-proxy"]);
+
+        assert!(matches!(
+            cli.command,
+            Commands::Start {
+                mode: StartMode::HttpProxy
             }
         ));
     }

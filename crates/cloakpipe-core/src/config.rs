@@ -54,6 +54,7 @@ pub struct ProxyConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProxyMode {
+    Server,
     #[default]
     #[serde(alias = "llm-http", alias = "llm_http", alias = "llm_proxy")]
     LlmProxy,
@@ -402,6 +403,24 @@ mod tests {
     #[test]
     fn proxy_mode_defaults_to_llm_proxy() {
         assert!(matches!(super::default_mode(), ProxyMode::LlmProxy));
+    }
+
+    #[test]
+    fn proxy_mode_serializes_documented_server_name() {
+        assert_eq!(
+            toml::to_string(&ProxyModeDoc {
+                mode: ProxyMode::Server,
+            })
+            .unwrap(),
+            "mode = \"server\"\n"
+        );
+    }
+
+    #[test]
+    fn proxy_mode_accepts_server_name() {
+        let doc: ProxyModeDoc = toml::from_str("mode = \"server\"").unwrap();
+
+        assert!(matches!(doc.mode, ProxyMode::Server));
     }
 
     #[test]

@@ -24,10 +24,10 @@ The MCP server enables **tools only**. It does not publish MCP resources or prom
 
 ## Starting the server
 
-Run the stdio server with the CLI:
+Run the server mode with the CLI. It starts the direct HTTP API surface and the stdio MCP tools without registering LLM proxy routes:
 
 ```bash
-cloakpipe --config /absolute/path/to/cloakpipe.toml mcp
+cloakpipe --config /absolute/path/to/cloakpipe.toml start server
 ```
 
 You can also omit `--config`. CloakPipe searches from the current directory upward for `cloakpipe.toml`, then `cloackpipe.toml`, and then uses `~/.cloakpipe/cloakpipe.toml`.
@@ -35,7 +35,7 @@ You can also omit `--config`. CloakPipe searches from the current directory upwa
 For local development from the workspace root, you can also run:
 
 ```bash
-cargo run -p cloakpipe-cli -- --config /absolute/path/to/cloakpipe.toml mcp
+cargo run -p cloakpipe-cli -- --config /absolute/path/to/cloakpipe.toml start server
 ```
 
 A typical MCP client entry looks like this:
@@ -48,7 +48,8 @@ A typical MCP client entry looks like this:
       "args": [
         "--config",
         "/absolute/path/to/cloakpipe.toml",
-        "mcp"
+        "start",
+        "server"
       ],
       "env": {
         "CLOAKPIPE_VAULT_KEY": "<64-char-hex-key>"

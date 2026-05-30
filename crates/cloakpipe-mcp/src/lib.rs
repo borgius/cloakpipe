@@ -417,17 +417,28 @@ impl CloakPipeServer {
             audit,
         }
     }
+
+    pub fn from_shared(
+        detector: Arc<RwLock<Detector>>,
+        vault: Arc<Mutex<Vault>>,
+        detection_config: Arc<RwLock<DetectionConfig>>,
+        active_profile: Arc<RwLock<Option<String>>>,
+        sessions: Arc<SessionManager>,
+        audit: AuditSink,
+    ) -> Self {
+        ensure_global_session(&sessions);
+        Self {
+            detector,
+            vault,
+            config: detection_config,
+            active_profile,
+            sessions,
+            audit,
+        }
+    }
 }
 
-/// Start the MCP server on stdio.
-pub async fn serve_stdio(
-    config: CloakPipeConfig,
-    detector: Detector,
-    vault: Vault,
-    audit: AuditSink,
-) -> anyhow::Result<()> {
-    let server = CloakPipeServer::new(config, detector, vault, audit);
-
+async fn serve_server_stdio(server: CloakPipeServer) -> anyhow::Result<()> {
     tracing::info!("Starting CloakPipe MCP server (stdio)");
 
     let transport = rmcp::transport::stdio();
@@ -441,6 +452,39 @@ pub async fn serve_stdio(
         .map_err(|e| anyhow::anyhow!("MCP server error: {}", e))?;
 
     Ok(())
+}
+
+/// Start the MCP server on stdio.
+pub async fn serve_stdio(
+    config: CloakPipeConfig,
+    detector: Detector,
+    vault: Vault,
+    audit: AuditSink,
+) -> anyhow::Result<()> {
+    let server = CloakPipeServer::new(config, detector, vault, audit);
+
+    serve_server_stdio(server).await
+}
+
+/// Start the MCP server on stdio using shared runtime state.
+pub async fn serve_stdio_shared(
+    detector: Arc<RwLock<Detector>>,
+    vault: Arc<Mutex<Vault>>,
+    detection_config: Arc<RwLock<DetectionConfig>>,
+    active_profile: Arc<RwLock<Option<String>>>,
+    sessions: Arc<SessionManager>,
+    audit: AuditSink,
+) -> anyhow::Result<()> {
+    let server = CloakPipeServer::from_shared(
+        detector,
+        vault,
+        detection_config,
+        active_profile,
+        sessions,
+        audit,
+    );
+
+    serve_server_stdio(server).await
 }
 
 #[cfg(test)]

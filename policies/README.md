@@ -3,7 +3,7 @@
 These files are **full `cloakpipe.toml`-compatible configs**. Pick one with:
 
 ```bash
-cloakpipe --config policies/<name>.toml start
+cloakpipe --config policies/<name>.toml start llm-proxy
 ```
 
 To customize a policy interactively, edit the active config:

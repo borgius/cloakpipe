@@ -33,7 +33,7 @@ fn test_config(audit_dir: &str) -> CloakPipeConfig {
             api_key_env: "OPENAI_API_KEY".into(),
             timeout_seconds: 120,
             max_concurrent: 256,
-            mode: ProxyMode::LlmProxy,
+            mode: ProxyMode::Server,
             dry_run: false,
             bypass: Vec::new(),
             auth_mode: ProxyAuthMode::ServerKey,
@@ -80,12 +80,16 @@ fn test_config(audit_dir: &str) -> CloakPipeConfig {
     }
 }
 
-fn test_state_with_api_key(api_key: Option<&str>) -> std::sync::Arc<AppState> {
+fn test_state_for_mode_with_api_key(
+    mode: ProxyMode,
+    api_key: Option<&str>,
+) -> std::sync::Arc<AppState> {
     let audit_dir = std::env::temp_dir()
         .join(format!("cloakpipe-proxy-test-{}", Uuid::new_v4()))
         .to_string_lossy()
         .to_string();
-    let config = test_config(&audit_dir);
+    let mut config = test_config(&audit_dir);
+    config.proxy.mode = mode;
     let detector = Detector::from_config(&config.detection).unwrap();
     let vault = Vault::ephemeral();
     let audit = AuditSink::from_config(&config.audit).unwrap();
@@ -99,15 +103,19 @@ fn test_state_with_api_key(api_key: Option<&str>) -> std::sync::Arc<AppState> {
     ))
 }
 
+fn test_state_with_api_key(api_key: Option<&str>) -> std::sync::Arc<AppState> {
+    test_state_for_mode_with_api_key(ProxyMode::Server, api_key)
+}
+
 #[derive(Clone)]
 enum MockBehavior {
-    EchoBody {
+    Echo {
         content_type: &'static str,
     },
-    StreamEchoBody {
+    StreamEcho {
         content_type: &'static str,
     },
-    StaticBody {
+    Static {
         content_type: &'static str,
         body: &'static str,
     },
@@ -151,12 +159,12 @@ async fn mock_upstream_handler(
         .unwrap();
 
     match state.behavior {
-        MockBehavior::EchoBody { content_type } => Response::builder()
+        MockBehavior::Echo { content_type } => Response::builder()
             .status(StatusCode::OK)
             .header("content-type", content_type)
             .body(Body::from(body))
             .unwrap(),
-        MockBehavior::StreamEchoBody { content_type } => {
+        MockBehavior::StreamEcho { content_type } => {
             let text = String::from_utf8(body).unwrap();
             let split_at = previous_char_boundary(&text, text.len() / 2);
             let (first, second) = text.split_at(split_at);
@@ -171,7 +179,7 @@ async fn mock_upstream_handler(
                 .body(Body::from_stream(stream))
                 .unwrap()
         }
-        MockBehavior::StaticBody { content_type, body } => Response::builder()
+        MockBehavior::Static { content_type, body } => Response::builder()
             .status(StatusCode::OK)
             .header("content-type", content_type)
             .body(Body::from(body.to_string()))
@@ -565,8 +573,58 @@ async fn test_session_context_endpoint_matches_mcp_shape() {
 }
 
 #[tokio::test]
-async fn test_chat_and_embeddings_return_service_unavailable_without_upstream_api_key() {
+async fn test_server_mode_does_not_expose_llm_proxy_routes() {
     let state = test_state_with_api_key(None);
+    let app = build_router(state);
+
+    let (status, _, _) = raw_response(
+        app,
+        Method::POST,
+        "/v1/chat/completions",
+        "application/json",
+        &[],
+        Body::from(
+            serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_llm_proxy_mode_does_not_expose_direct_api_endpoints() {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
+        content_type: "application/json",
+    })
+    .await;
+    let state = llm_proxy_test_state(&upstream, false, Vec::new(), ProxyAuthMode::PassThrough);
+    let app = build_router(state);
+
+    let (status, _, _) = raw_response(
+        app,
+        Method::POST,
+        "/v1/pseudonymize",
+        "application/json",
+        &[("authorization", "Bearer caller-token")],
+        Body::from(serde_json::json!({ "text": "alice@example.com" }).to_string()),
+    )
+    .await;
+
+    let captured = captured_rx.recv().await.unwrap();
+    server_handle.abort();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(captured.path_and_query, "/v1/pseudonymize");
+}
+
+#[tokio::test]
+async fn test_chat_and_embeddings_return_service_unavailable_without_upstream_api_key() {
+    let state = test_state_for_mode_with_api_key(ProxyMode::LlmProxy, None);
 
     let app = build_router(state.clone());
     let (status, body) = text_response(
@@ -626,7 +684,7 @@ async fn test_upstream_backed_tree_routes_return_service_unavailable_without_ups
 
 #[tokio::test]
 async fn test_llm_proxy_routes_openai_requests_and_mutates_only_content_fields() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
         content_type: "application/json",
     })
     .await;
@@ -689,7 +747,7 @@ async fn test_llm_proxy_routes_openai_requests_and_mutates_only_content_fields()
 
 #[tokio::test]
 async fn test_llm_proxy_redacts_unexpected_pii_in_json_responses() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::StaticBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Static {
         content_type: "application/json",
         body: r#"{"choices":[{"message":{"content":"Contact leaked@example.com immediately."}}]}"#,
     })
@@ -731,7 +789,7 @@ async fn test_llm_proxy_redacts_unexpected_pii_in_json_responses() {
 
 #[tokio::test]
 async fn test_llm_proxy_reuses_session_coreference_tokens() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
         content_type: "application/json",
     })
     .await;
@@ -797,7 +855,7 @@ async fn test_llm_proxy_reuses_session_coreference_tokens() {
 
 #[tokio::test]
 async fn test_llm_proxy_routes_anthropic_prefix_and_forwards_pass_through_auth() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
         content_type: "application/json",
     })
     .await;
@@ -850,7 +908,7 @@ async fn test_llm_proxy_routes_anthropic_prefix_and_forwards_pass_through_auth()
 
 #[tokio::test]
 async fn test_llm_proxy_dry_run_forwards_original_body() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
         content_type: "text/plain",
     })
     .await;
@@ -883,7 +941,7 @@ async fn test_llm_proxy_dry_run_forwards_original_body() {
 
 #[tokio::test]
 async fn test_llm_proxy_bypass_forwards_original_body_and_skips_rehydration() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
         content_type: "text/plain",
     })
     .await;
@@ -921,7 +979,7 @@ async fn test_llm_proxy_bypass_forwards_original_body_and_skips_rehydration() {
 
 #[tokio::test]
 async fn test_llm_proxy_rehydrates_full_text_responses() {
-    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::EchoBody {
+    let (upstream, mut captured_rx, server_handle) = spawn_mock_upstream(MockBehavior::Echo {
         content_type: "text/plain",
     })
     .await;
@@ -954,7 +1012,7 @@ async fn test_llm_proxy_rehydrates_full_text_responses() {
 #[tokio::test]
 async fn test_llm_proxy_restores_streamed_fake_across_chunk_boundary() {
     let (upstream, mut captured_rx, server_handle) =
-        spawn_mock_upstream(MockBehavior::StreamEchoBody {
+        spawn_mock_upstream(MockBehavior::StreamEcho {
             content_type: "text/event-stream",
         })
         .await;
