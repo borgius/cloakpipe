@@ -18,7 +18,9 @@ mod vault;
 
 use crate::state::AppState;
 use axum::{
-    http::StatusCode,
+    extract::{Request, State},
+    http::{header, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
@@ -33,8 +35,16 @@ pub fn router() -> Router<Arc<AppState>> {
         // System / runtime status
         .route("/system", get(system::get_system))
         // Profiles
-        .route("/profiles", get(profiles::list_profiles))
-        .route("/profiles/:name", get(profiles::get_profile))
+        .route(
+            "/profiles",
+            get(profiles::list_profiles).post(profiles::create_profile),
+        )
+        .route(
+            "/profiles/:name",
+            get(profiles::get_profile)
+                .put(profiles::update_profile)
+                .delete(profiles::delete_profile),
+        )
         .route("/profiles/:name/activate", post(profiles::activate_profile))
         // Policies (disk-backed local configs / presets)
         .route("/policies", get(policies::list_policies))
@@ -123,6 +133,59 @@ impl IntoResponse for AdminError {
         });
         (self.status, body).into_response()
     }
+}
+
+/// Axum middleware enforcing the optional admin bearer token.
+///
+/// When no token is configured (the default) the request is allowed through so
+/// the admin API stays usable for trusted/local operators. When a token is set
+/// (via `CLOAKPIPE_ADMIN_TOKEN` / `proxy.admin_token_env`) every request must
+/// present a matching `Authorization: ****** header or it is rejected with
+/// `401 Unauthorized`.
+pub(crate) async fn require_auth(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let expected = match state.admin.read() {
+        Ok(admin) => admin.admin_token.clone(),
+        Err(_) => {
+            return AdminError::internal("admin context lock poisoned").into_response();
+        }
+    };
+
+    if let Some(expected) = expected {
+        let provided = request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::trim)
+            .unwrap_or("");
+
+        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            return AdminError::new(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "Missing or invalid admin token. Provide 'Authorization: ******.",
+            )
+            .into_response();
+        }
+    }
+
+    next.run(request).await
+}
+
+/// Constant-time byte-slice comparison to avoid leaking the token via timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Rebuild the live detector from a new detection config and atomically swap it

@@ -26,6 +26,7 @@ struct Harness {
     router: Router,
     _tmp: tempfile::TempDir,
     policies_dir: PathBuf,
+    profiles_dir: PathBuf,
 }
 
 fn base_config(audit_dir: &str, audit_backend: &str) -> CloakPipeConfig {
@@ -43,6 +44,7 @@ fn base_config(audit_dir: &str, audit_backend: &str) -> CloakPipeConfig {
             provider_routes: std::collections::HashMap::new(),
             http_proxy: Default::default(),
             masking_strategy: MaskingStrategy::Token,
+            admin_token_env: "CLOAKPIPE_ADMIN_TOKEN".into(),
         },
         vault: VaultConfig {
             path: "./vault.enc".into(),
@@ -85,9 +87,15 @@ fn base_config(audit_dir: &str, audit_backend: &str) -> CloakPipeConfig {
 }
 
 fn harness(audit_backend: &str) -> Harness {
+    harness_with_token(audit_backend, None)
+}
+
+fn harness_with_token(audit_backend: &str, admin_token: Option<&str>) -> Harness {
     let tmp = tempfile::tempdir().unwrap();
     let policies_dir = tmp.path().join("policies");
     std::fs::create_dir_all(&policies_dir).unwrap();
+    let profiles_dir = tmp.path().join("profiles");
+    std::fs::create_dir_all(&profiles_dir).unwrap();
     let audit_dir = tmp.path().join("audit");
     std::fs::create_dir_all(&audit_dir).unwrap();
     let config_path = tmp.path().join("cloakpipe.toml");
@@ -99,12 +107,15 @@ fn harness(audit_backend: &str) -> Harness {
     let audit = AuditSink::from_config(&config.audit).unwrap();
     let state = std::sync::Arc::new(
         AppState::new(config, detector, vault, audit, None)
-            .with_admin_context(Some(config_path), Some(policies_dir.clone())),
+            .with_admin_context(Some(config_path), Some(policies_dir.clone()))
+            .with_profiles_dir(Some(profiles_dir.clone()))
+            .with_admin_token(admin_token.map(str::to_string)),
     );
     Harness {
         router: build_router_from_state(state),
         _tmp: tmp,
         policies_dir,
+        profiles_dir,
     }
 }
 
@@ -140,6 +151,21 @@ async fn request(
     (status, value)
 }
 
+/// Issue a request with an optional `Authorization` header value.
+async fn request_with_auth(
+    router: &Router,
+    method: Method,
+    uri: &str,
+    authorization: Option<&str>,
+) -> StatusCode {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(value) = authorization {
+        builder = builder.header("authorization", value);
+    }
+    let req = builder.body(Body::empty()).unwrap();
+    router.clone().oneshot(req).await.unwrap().status()
+}
+
 #[tokio::test]
 async fn system_status_reports_runtime_state() {
     let h = harness("jsonl");
@@ -151,6 +177,8 @@ async fn system_status_reports_runtime_state() {
     assert_eq!(body["audit"]["backend"], "jsonl");
     assert!(body["config_path"].is_string());
     assert!(body["policies_dir"].is_string());
+    assert!(body["profiles_dir"].is_string());
+    assert_eq!(body["auth_required"], false);
 }
 
 #[tokio::test]
@@ -380,4 +408,194 @@ async fn vault_mappings_redacted_by_default() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["redacted"], true);
     assert!(body["mappings"].is_array());
+}
+
+#[tokio::test]
+async fn custom_profile_lifecycle() {
+    let h = harness("jsonl");
+
+    // Create a custom profile.
+    let create = serde_json::json!({
+        "name": "acme",
+        "description": "ACME corp defaults",
+        "detection": {
+            "secrets": true,
+            "financial": false,
+            "dates": false,
+            "emails": true,
+            "phone_numbers": false,
+            "ip_addresses": false,
+            "urls_internal": false,
+            "ner": { "enabled": false }
+        }
+    });
+    let (status, body) = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles",
+        Some(create.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(body["kind"], "custom");
+    assert_eq!(body["name"], "acme");
+    assert!(h.profiles_dir.join("acme.json").exists());
+
+    // It now shows up in the listing alongside built-ins.
+    let (status, body) = request(&h.router, Method::GET, "/admin/api/profiles", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let custom = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "acme")
+        .expect("custom profile listed");
+    assert_eq!(custom["kind"], "custom");
+
+    // Reserved built-in names are rejected.
+    let (status, _) = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles",
+        Some(serde_json::json!({ "name": "legal", "detection": create["detection"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Duplicate create is rejected.
+    let (status, _) = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles",
+        Some(create.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Activate the custom profile.
+    let (status, body) = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles/acme/activate",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["active"], true);
+    assert_eq!(body["kind"], "custom");
+
+    // Cannot delete the active profile.
+    let (status, _) = request(&h.router, Method::DELETE, "/admin/api/profiles/acme", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Switch away, then delete succeeds.
+    let _ = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles/general/activate",
+        None,
+    )
+    .await;
+    let (status, body) = request(&h.router, Method::DELETE, "/admin/api/profiles/acme", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["deleted"], true);
+    assert!(!h.profiles_dir.join("acme.json").exists());
+
+    // Updating a missing profile 404s.
+    let (status, _) = request(
+        &h.router,
+        Method::PUT,
+        "/admin/api/profiles/ghost",
+        Some(create),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn audit_jsonl_query_supported() {
+    let h = harness("jsonl");
+    // Activating profiles writes JSONL audit metadata entries.
+    let _ = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles/legal/activate",
+        None,
+    )
+    .await;
+    let _ = request(
+        &h.router,
+        Method::POST,
+        "/admin/api/profiles/healthcare/activate",
+        None,
+    )
+    .await;
+
+    let (status, body) = request(
+        &h.router,
+        Method::GET,
+        "/admin/api/audit/events?limit=10",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["backend"], "jsonl");
+    assert_eq!(body["supported"], true);
+    assert!(body["total_matched"].as_u64().unwrap() >= 2);
+    assert!(!body["events"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn admin_auth_enforced_when_token_set() {
+    let h = harness_with_token("jsonl", Some("s3cret"));
+
+    // Correct bearer token is accepted.
+    let status = request_with_auth(
+        &h.router,
+        Method::GET,
+        "/admin/api/system",
+        Some(concat!("Bearer ", "s3cret")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Missing token is rejected.
+    let status = request_with_auth(&h.router, Method::GET, "/admin/api/system", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Wrong token is rejected.
+    let status = request_with_auth(
+        &h.router,
+        Method::GET,
+        "/admin/api/system",
+        Some(concat!("Bearer ", "nope")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_open_when_no_token() {
+    let h = harness("jsonl");
+    let status = request_with_auth(&h.router, Method::GET, "/admin/api/system", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn parameterized_routes_capture_path_segments() {
+    // Regression test for the `:id`/`:name` route syntax (axum 0.7 / matchit
+    // 0.7): a path parameter must be *captured*, not matched literally. With the
+    // wrong `{id}` syntax the segment is treated as a literal and the handler
+    // never sees the real id.
+    let h = harness("jsonl");
+
+    // DELETE /sessions/<id> must reach the handler and echo the captured id.
+    let (status, body) = request(&h.router, Method::DELETE, "/sessions/sess-123", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["session_id"], "sess-123");
+
+    // Admin parameterized route reaches its handler too.
+    let (status, body) = request(&h.router, Method::GET, "/admin/api/profiles/legal", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], "legal");
 }

@@ -123,6 +123,7 @@ fn http_proxy_test_state_value(http_proxy: HttpProxyConfig) -> AppState {
             provider_routes: HashMap::new(),
             http_proxy,
             masking_strategy: MaskingStrategy::Similar,
+            admin_token_env: "CLOAKPIPE_ADMIN_TOKEN".into(),
         },
         vault: VaultConfig {
             path: "./vault.enc".into(),

@@ -617,6 +617,7 @@ pub async fn start(config_path: Option<&str>, mode: crate::StartMode) -> Result<
     log_resolved_config(&resolved);
     let admin_config_path = resolved.path.clone();
     let admin_policies_dir = resolve_policies_dir(&resolved.base_dir);
+    let admin_profiles_dir = resolve_profiles_dir(&resolved.base_dir);
     let mut config = resolved.config;
     config.proxy.mode = mode.into();
     preflight_http_proxy_config(&config)?;
@@ -625,6 +626,7 @@ pub async fn start(config_path: Option<&str>, mode: crate::StartMode) -> Result<
     let vault = Vault::open(&config.vault.path, key)?;
     let audit = AuditSink::from_config(&config.audit)?;
     let api_key = resolve_proxy_api_key(&config);
+    let admin_token = resolve_admin_token(&config);
 
     tracing::info!(
         mode = ?config.proxy.mode,
@@ -634,7 +636,9 @@ pub async fn start(config_path: Option<&str>, mode: crate::StartMode) -> Result<
     );
 
     let state = AppState::try_new(config, detector, vault, audit, api_key)?
-        .with_admin_context(Some(admin_config_path), Some(admin_policies_dir));
+        .with_admin_context(Some(admin_config_path), Some(admin_policies_dir))
+        .with_profiles_dir(Some(admin_profiles_dir))
+        .with_admin_token(admin_token);
     if matches!(state.config.proxy.mode, ProxyMode::Server) {
         start_api_and_mcp_server(state).await
     } else {
@@ -652,6 +656,29 @@ fn resolve_policies_dir(base_dir: &Path) -> PathBuf {
         nested
     } else {
         base_dir.to_path_buf()
+    }
+}
+
+/// Resolve the directory used by the admin API to persist custom profiles.
+///
+/// Custom profiles live in a dedicated `profiles/` subdirectory next to the
+/// active config so they never collide with policy files.
+fn resolve_profiles_dir(base_dir: &Path) -> PathBuf {
+    base_dir.join("profiles")
+}
+
+/// Resolve the optional admin API bearer token from the configured env var.
+///
+/// Returns `None` when the variable is unset/empty, leaving the admin API
+/// unauthenticated (trusted/local use).
+fn resolve_admin_token(config: &CloakPipeConfig) -> Option<String> {
+    let env_var = config.proxy.admin_token_env.as_str();
+    match std::env::var(env_var) {
+        Ok(token) if !token.trim().is_empty() => {
+            tracing::info!(env_var = env_var, "Admin API authentication enabled");
+            Some(token)
+        }
+        _ => None,
     }
 }
 
@@ -3121,6 +3148,7 @@ fn default_config() -> CloakPipeConfig {
             provider_routes: HashMap::new(),
             http_proxy: Default::default(),
             masking_strategy: cloakpipe_core::MaskingStrategy::default(),
+            admin_token_env: "CLOAKPIPE_ADMIN_TOKEN".into(),
         },
         vault: cloakpipe_core::config::VaultConfig {
             path: "./vault.enc".into(),

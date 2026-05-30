@@ -126,6 +126,7 @@ mod tests {
             ]),
             http_proxy: Default::default(),
             masking_strategy: MaskingStrategy::Similar,
+            admin_token_env: "CLOAKPIPE_ADMIN_TOKEN".into(),
         }
     }
 

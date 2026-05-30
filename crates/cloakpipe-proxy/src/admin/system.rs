@@ -17,6 +17,8 @@ pub struct SystemStatus {
     pub active_profile: Option<String>,
     pub config_path: Option<String>,
     pub policies_dir: Option<String>,
+    pub profiles_dir: Option<String>,
+    pub auth_required: bool,
     pub masking_strategy: String,
     pub detection: DetectionSummary,
     pub ner: NerSummary,
@@ -87,7 +89,7 @@ pub async fn get_system(
     let detection = state.detection_config.read().await.clone();
     let active_profile = state.active_profile.read().await.clone();
 
-    let (config_path, policies_dir) = {
+    let (config_path, policies_dir, profiles_dir) = {
         let admin = state
             .admin
             .read()
@@ -95,6 +97,7 @@ pub async fn get_system(
         (
             admin.config_path.as_ref().map(|p| p.display().to_string()),
             admin.policies_dir.as_ref().map(|p| p.display().to_string()),
+            admin.profiles_dir.as_ref().map(|p| p.display().to_string()),
         )
     };
 
@@ -122,6 +125,8 @@ pub async fn get_system(
         active_profile,
         config_path,
         policies_dir,
+        profiles_dir,
+        auth_required: state.admin_auth_required(),
         masking_strategy,
         detection: DetectionSummary {
             secrets: detection.secrets,

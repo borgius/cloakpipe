@@ -40,6 +40,7 @@ fn test_config(audit_dir: &str) -> CloakPipeConfig {
             provider_routes: std::collections::HashMap::new(),
             http_proxy: Default::default(),
             masking_strategy: MaskingStrategy::Token,
+            admin_token_env: "CLOAKPIPE_ADMIN_TOKEN".into(),
         },
         vault: VaultConfig {
             path: "./vault.enc".into(),
@@ -242,6 +243,7 @@ fn llm_proxy_test_state(
             ]),
             http_proxy: Default::default(),
             masking_strategy: MaskingStrategy::Similar,
+            admin_token_env: "CLOAKPIPE_ADMIN_TOKEN".into(),
         },
         vault: VaultConfig {
             path: "./vault.enc".into(),

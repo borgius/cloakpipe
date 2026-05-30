@@ -49,6 +49,13 @@ pub struct ProxyConfig {
     pub http_proxy: HttpProxyConfig,
     #[serde(default)]
     pub masking_strategy: crate::MaskingStrategy,
+    /// Name of the environment variable holding the admin API bearer token.
+    ///
+    /// When this variable is set to a non-empty value, every `/admin/api/*`
+    /// request must present `Authorization: ****** When unset/empty
+    /// the admin API is unauthenticated (intended for trusted/local use).
+    #[serde(default = "default_admin_token_env")]
+    pub admin_token_env: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -281,6 +288,9 @@ fn default_mode() -> ProxyMode {
 }
 fn default_auth_mode() -> ProxyAuthMode {
     ProxyAuthMode::PassThrough
+}
+fn default_admin_token_env() -> String {
+    "CLOAKPIPE_ADMIN_TOKEN".into()
 }
 fn default_tunnel_unknown_hosts() -> bool {
     true
