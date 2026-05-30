@@ -10,6 +10,7 @@ use cloakpipe_core::{
     vault::Vault,
 };
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::{Mutex, RwLock};
 
 /// Shared state accessible from all request handlers.
@@ -24,6 +25,18 @@ pub struct AppState {
     pub direct_http_client: reqwest::Client,
     pub api_key: Option<String>,
     pub sessions: Arc<SessionManager>,
+    /// Admin context: filesystem locations used by the admin API. Optional so
+    /// existing constructors (and tests) keep working without admin wiring.
+    pub admin: Arc<StdRwLock<AdminContext>>,
+}
+
+/// Filesystem context the admin API needs to read/write config and policies.
+#[derive(Debug, Clone, Default)]
+pub struct AdminContext {
+    /// Path of the loaded config/policy file, if any.
+    pub config_path: Option<std::path::PathBuf>,
+    /// Directory where policy files are stored/managed.
+    pub policies_dir: Option<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -63,7 +76,21 @@ impl AppState {
             direct_http_client,
             api_key,
             sessions,
+            admin: Arc::new(StdRwLock::new(AdminContext::default())),
         })
+    }
+
+    /// Attach admin filesystem context (loaded config path + policies dir).
+    pub fn with_admin_context(
+        self,
+        config_path: Option<std::path::PathBuf>,
+        policies_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        if let Ok(mut admin) = self.admin.write() {
+            admin.config_path = config_path;
+            admin.policies_dir = policies_dir;
+        }
+        self
     }
 
     /// Return the outbound HTTP client for a target URL, honoring forward_no_proxy.

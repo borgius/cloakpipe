@@ -1,6 +1,6 @@
 //! HTTP server setup and router configuration.
 
-use crate::{handlers, http_proxy, llm_proxy, state::AppState, tree_handlers};
+use crate::{admin, handlers, http_proxy, llm_proxy, state::AppState, tree_handlers};
 use axum::{
     routing::any,
     routing::{get, post},
@@ -55,6 +55,8 @@ fn build_server_router() -> Router<Arc<AppState>> {
             "/sessions/{id}",
             get(handlers::session_inspect).delete(handlers::session_flush),
         )
+        // Self-hosted admin API (server mode only)
+        .nest("/admin/api", admin::router())
 }
 
 fn build_llm_proxy_router() -> Router<Arc<AppState>> {

@@ -4,6 +4,7 @@
 //! entities in prompts, forwards the sanitized request, then rehydrates
 //! the response before returning it to the caller.
 
+pub mod admin;
 pub mod handlers;
 pub mod http_proxy;
 pub mod json_filter;

@@ -8,7 +8,7 @@ pub mod sqlite;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use cloakpipe_core::config::AuditConfig;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -64,30 +64,36 @@ impl<'a> AuditContext<'a> {
 }
 
 /// A single audit log entry.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub id: String,
     pub timestamp: String,
     pub event: AuditEvent,
+    #[serde(default = "default_surface")]
     pub surface: String,
+    #[serde(default)]
     pub request_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities_detected: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities_replaced: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_rehydrated: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+fn default_surface() -> String {
+    "unknown".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditEvent {
     Pseudonymize,
@@ -100,6 +106,24 @@ pub enum AuditEvent {
     VaultLoad,
     ProxyRequest,
     Error,
+}
+
+impl AuditEvent {
+    /// Stable snake_case name used in storage and APIs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            AuditEvent::Pseudonymize => "pseudonymize",
+            AuditEvent::Rehydrate => "rehydrate",
+            AuditEvent::Detect => "detect",
+            AuditEvent::VaultStats => "vault_stats",
+            AuditEvent::Configure => "configure",
+            AuditEvent::SessionContext => "session_context",
+            AuditEvent::VaultSave => "vault_save",
+            AuditEvent::VaultLoad => "vault_load",
+            AuditEvent::ProxyRequest => "proxy_request",
+            AuditEvent::Error => "error",
+        }
+    }
 }
 
 impl AuditLogger {
@@ -403,5 +427,255 @@ fn sqlite_path(path: &str) -> std::path::PathBuf {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("db") | Some("sqlite") | Some("sqlite3") => path,
         _ => path.join("audit.db"),
+    }
+}
+
+/// Which storage backend an [`AuditSink`] is using.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditBackend {
+    Disabled,
+    Jsonl,
+    Sqlite,
+}
+
+/// Filter parameters for querying persisted audit entries.
+#[derive(Debug, Clone, Default)]
+pub struct AuditQuery {
+    pub event: Option<String>,
+    pub surface: Option<String>,
+    pub session_id: Option<String>,
+    /// Inclusive lower bound (RFC3339 timestamp string comparison).
+    pub since: Option<String>,
+    /// Inclusive upper bound (RFC3339 timestamp string comparison).
+    pub until: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl AuditQuery {
+    fn matches(&self, entry: &AuditEntry) -> bool {
+        if let Some(event) = &self.event {
+            if !event.is_empty() && entry.event.name() != event.to_ascii_lowercase() {
+                return false;
+            }
+        }
+        if let Some(surface) = &self.surface {
+            if !surface.is_empty() && &entry.surface != surface {
+                return false;
+            }
+        }
+        if let Some(session) = &self.session_id {
+            if !session.is_empty() && entry.session_id.as_deref() != Some(session.as_str()) {
+                return false;
+            }
+        }
+        if let Some(since) = &self.since {
+            if !since.is_empty() && entry.timestamp.as_str() < since.as_str() {
+                return false;
+            }
+        }
+        if let Some(until) = &self.until {
+            if !until.is_empty() && entry.timestamp.as_str() > until.as_str() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Result of an audit query, including total matched count for pagination.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditQueryResult {
+    pub backend: AuditBackend,
+    pub entries: Vec<AuditEntry>,
+    pub total_matched: usize,
+}
+
+impl AuditSink {
+    /// Return which backend this sink writes to.
+    pub fn backend(&self) -> AuditBackend {
+        match self.inner.as_ref() {
+            AuditSinkInner::Disabled => AuditBackend::Disabled,
+            AuditSinkInner::Jsonl(_) => AuditBackend::Jsonl,
+            AuditSinkInner::Sqlite(_) => AuditBackend::Sqlite,
+        }
+    }
+
+    /// Human-readable description of where audit entries are stored.
+    pub fn location(&self) -> Option<String> {
+        match self.inner.as_ref() {
+            AuditSinkInner::Disabled => None,
+            AuditSinkInner::Jsonl(logger) => Some(logger.log_dir().to_string()),
+            AuditSinkInner::Sqlite(logger) => {
+                Some(logger.lock().ok()?.db_path().unwrap_or_default())
+            }
+        }
+    }
+
+    /// Query persisted audit entries using the provided filter.
+    ///
+    /// Both SQLite and JSONL backends are supported. A disabled sink returns an
+    /// empty result set with `backend = disabled` so callers can render a clear
+    /// unsupported/empty state.
+    pub fn query(&self, query: &AuditQuery) -> Result<AuditQueryResult> {
+        match self.inner.as_ref() {
+            AuditSinkInner::Disabled => Ok(AuditQueryResult {
+                backend: AuditBackend::Disabled,
+                entries: Vec::new(),
+                total_matched: 0,
+            }),
+            AuditSinkInner::Sqlite(logger) => {
+                let logger = logger.lock().expect("audit sqlite logger lock poisoned");
+                let (entries, total) = logger.query(query)?;
+                Ok(AuditQueryResult {
+                    backend: AuditBackend::Sqlite,
+                    entries,
+                    total_matched: total,
+                })
+            }
+            AuditSinkInner::Jsonl(logger) => {
+                let (entries, total) = logger.query(query)?;
+                Ok(AuditQueryResult {
+                    backend: AuditBackend::Jsonl,
+                    entries,
+                    total_matched: total,
+                })
+            }
+        }
+    }
+
+    /// Aggregate event counts across all persisted entries.
+    pub fn summary(&self) -> Result<Vec<(String, usize)>> {
+        match self.inner.as_ref() {
+            AuditSinkInner::Disabled => Ok(Vec::new()),
+            AuditSinkInner::Sqlite(logger) => logger
+                .lock()
+                .expect("audit sqlite logger lock poisoned")
+                .event_counts(),
+            AuditSinkInner::Jsonl(logger) => logger.event_counts(),
+        }
+    }
+}
+
+impl AuditLogger {
+    /// Read and filter entries from the JSONL log directory.
+    ///
+    /// Returns `(page, total_matched)`. Entries are returned newest-first.
+    pub fn query(&self, query: &AuditQuery) -> Result<(Vec<AuditEntry>, usize)> {
+        let mut matched: Vec<AuditEntry> = Vec::new();
+        let read_dir = match fs::read_dir(&self.log_dir) {
+            Ok(rd) => rd,
+            Err(_) => return Ok((Vec::new(), 0)),
+        };
+        let mut files: Vec<std::path::PathBuf> = read_dir
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with("audit-"))
+                        .unwrap_or(false)
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(entry) = serde_json::from_str::<AuditEntry>(line) {
+                    if query.matches(&entry) {
+                        matched.push(entry);
+                    }
+                }
+            }
+        }
+        matched.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        let total = matched.len();
+        let page = matched
+            .into_iter()
+            .skip(query.offset)
+            .take(if query.limit == 0 { total } else { query.limit })
+            .collect();
+        Ok((page, total))
+    }
+
+    /// Count events by type across all JSONL files.
+    pub fn event_counts(&self) -> Result<Vec<(String, usize)>> {
+        let (all, _) = self.query(&AuditQuery {
+            limit: 0,
+            ..Default::default()
+        })?;
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for entry in all {
+            *counts.entry(entry.event.name().to_string()).or_default() += 1;
+        }
+        let mut counts: Vec<(String, usize)> = counts.into_iter().collect();
+        counts.sort_by_key(|b| std::cmp::Reverse(b.1));
+        Ok(counts)
+    }
+}
+
+#[cfg(test)]
+mod jsonl_tests {
+    use super::*;
+
+    #[test]
+    fn jsonl_sink_query_and_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AuditConfig {
+            enabled: true,
+            log_path: dir.path().to_string_lossy().to_string(),
+            format: "jsonl".into(),
+            retention_days: 90,
+            log_entities: true,
+            log_mappings: false,
+            backend: "jsonl".into(),
+        };
+        let sink = AuditSink::from_config(&config).unwrap();
+        assert_eq!(sink.backend(), AuditBackend::Jsonl);
+
+        sink.log_pseudonymize(AuditContext::new("api", "r1"), 3, 3, vec!["PERSON".into()])
+            .unwrap();
+        sink.log_rehydrate(AuditContext::new("api", "r2"), 2)
+            .unwrap();
+
+        let result = sink
+            .query(&AuditQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(result.total_matched, 2);
+        assert_eq!(result.entries.len(), 2);
+
+        let filtered = sink
+            .query(&AuditQuery {
+                event: Some("rehydrate".into()),
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(filtered.total_matched, 1);
+        assert_eq!(filtered.entries[0].event, AuditEvent::Rehydrate);
+
+        let summary = sink.summary().unwrap();
+        assert_eq!(summary.iter().map(|(_, c)| c).sum::<usize>(), 2);
+    }
+
+    #[test]
+    fn disabled_sink_query_is_empty() {
+        let sink = AuditSink::disabled();
+        assert_eq!(sink.backend(), AuditBackend::Disabled);
+        let result = sink.query(&AuditQuery::default()).unwrap();
+        assert!(result.entries.is_empty());
+        assert_eq!(result.total_matched, 0);
     }
 }

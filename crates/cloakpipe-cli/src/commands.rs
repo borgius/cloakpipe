@@ -615,6 +615,8 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>> {
 pub async fn start(config_path: Option<&str>, mode: crate::StartMode) -> Result<()> {
     let resolved = load_resolved_config(config_path)?;
     log_resolved_config(&resolved);
+    let admin_config_path = resolved.path.clone();
+    let admin_policies_dir = resolve_policies_dir(&resolved.base_dir);
     let mut config = resolved.config;
     config.proxy.mode = mode.into();
     preflight_http_proxy_config(&config)?;
@@ -631,11 +633,25 @@ pub async fn start(config_path: Option<&str>, mode: crate::StartMode) -> Result<
         "Starting CloakPipe server"
     );
 
-    let state = AppState::try_new(config, detector, vault, audit, api_key)?;
+    let state = AppState::try_new(config, detector, vault, audit, api_key)?
+        .with_admin_context(Some(admin_config_path), Some(admin_policies_dir));
     if matches!(state.config.proxy.mode, ProxyMode::Server) {
         start_api_and_mcp_server(state).await
     } else {
         server::start(state).await
+    }
+}
+
+/// Resolve the directory used by the admin API to manage policy files.
+///
+/// Prefers a `policies/` subdirectory next to the active config, falling back to
+/// the config's own directory so listing always works for local operators.
+fn resolve_policies_dir(base_dir: &Path) -> PathBuf {
+    let nested = base_dir.join("policies");
+    if nested.is_dir() {
+        nested
+    } else {
+        base_dir.to_path_buf()
     }
 }
 

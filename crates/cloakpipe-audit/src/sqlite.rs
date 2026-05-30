@@ -18,6 +18,7 @@ pub struct SqliteAuditLogger {
     conn: Connection,
     log_entities: bool,
     retention_days: u32,
+    db_path: Option<String>,
 }
 
 impl SqliteAuditLogger {
@@ -38,6 +39,7 @@ impl SqliteAuditLogger {
             conn,
             log_entities,
             retention_days,
+            db_path: Some(path.to_string()),
         };
 
         // Clean up old entries on open
@@ -54,7 +56,13 @@ impl SqliteAuditLogger {
             conn,
             log_entities,
             retention_days: 90,
+            db_path: None,
         })
+    }
+
+    /// Path of the backing database file, if any.
+    pub fn db_path(&self) -> Option<String> {
+        self.db_path.clone()
     }
 
     fn init_schema(conn: &Connection) -> Result<()> {
@@ -307,6 +315,103 @@ impl SqliteAuditLogger {
             .query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))?;
         Ok(count as usize)
     }
+
+    /// Query entries with filtering and pagination. Returns `(page, total_matched)`.
+    pub fn query(&self, query: &crate::AuditQuery) -> Result<(Vec<AuditEntry>, usize)> {
+        let mut clauses: Vec<String> = Vec::new();
+        let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(event) = query.event.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("event = ?{}", args.len() + 1));
+            args.push(Box::new(event.to_ascii_lowercase()));
+        }
+        if let Some(surface) = query.surface.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("surface = ?{}", args.len() + 1));
+            args.push(Box::new(surface.clone()));
+        }
+        if let Some(session) = query.session_id.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("session_id = ?{}", args.len() + 1));
+            args.push(Box::new(session.clone()));
+        }
+        if let Some(since) = query.since.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("timestamp >= ?{}", args.len() + 1));
+            args.push(Box::new(since.clone()));
+        }
+        if let Some(until) = query.until.as_ref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("timestamp <= ?{}", args.len() + 1));
+            args.push(Box::new(until.clone()));
+        }
+
+        let where_sql = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", clauses.join(" AND "))
+        };
+
+        let arg_refs: Vec<&dyn rusqlite::types::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+
+        let total: i64 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM audit_log {}", where_sql),
+            arg_refs.as_slice(),
+            |row| row.get(0),
+        )?;
+
+        let limit = if query.limit == 0 {
+            total.max(0)
+        } else {
+            query.limit as i64
+        };
+
+        let sql = format!(
+            "SELECT id, timestamp, event, surface, request_id, user_id, session_id, \
+             entities_detected, entities_replaced, tokens_rehydrated, categories, error \
+             FROM audit_log {} ORDER BY timestamp DESC LIMIT {} OFFSET {}",
+            where_sql, limit, query.offset as i64
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(arg_refs.as_slice(), Self::row_to_entry)?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok((entries, total.max(0) as usize))
+    }
+
+    fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEntry> {
+        let event_str: String = row.get(2)?;
+        let cats_json: Option<String> = row.get(10)?;
+        Ok(AuditEntry {
+            id: row.get(0)?,
+            timestamp: row.get(1)?,
+            event: parse_event(&event_str),
+            surface: row.get(3)?,
+            request_id: row.get(4)?,
+            user_id: row.get(5)?,
+            session_id: row.get(6)?,
+            entities_detected: row.get::<_, Option<i64>>(7)?.map(|n| n as usize),
+            entities_replaced: row.get::<_, Option<i64>>(8)?.map(|n| n as usize),
+            tokens_rehydrated: row.get::<_, Option<i64>>(9)?.map(|n| n as usize),
+            categories: cats_json.and_then(|j| serde_json::from_str(&j).ok()),
+            error: row.get(11)?,
+        })
+    }
+}
+
+fn parse_event(event_str: &str) -> AuditEvent {
+    match event_str {
+        "pseudonymize" => AuditEvent::Pseudonymize,
+        "rehydrate" => AuditEvent::Rehydrate,
+        "detect" => AuditEvent::Detect,
+        "vault_stats" => AuditEvent::VaultStats,
+        "configure" => AuditEvent::Configure,
+        "session_context" => AuditEvent::SessionContext,
+        "vault_save" => AuditEvent::VaultSave,
+        "vault_load" => AuditEvent::VaultLoad,
+        "proxy_request" => AuditEvent::ProxyRequest,
+        "error" => AuditEvent::Error,
+        _ => AuditEvent::ProxyRequest,
+    }
 }
 
 fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -443,5 +548,24 @@ mod tests {
             let logger = SqliteAuditLogger::open(path_str, true, 90).unwrap();
             assert_eq!(logger.total_entries().unwrap(), 2);
         }
+    }
+
+    #[test]
+    fn test_sqlite_query_filters_by_event_and_paginates() {
+        let logger = SqliteAuditLogger::in_memory(true).unwrap();
+        logger.log_pseudonymize("r1", 1, 1, vec![]).unwrap();
+        logger.log_pseudonymize("r2", 2, 2, vec![]).unwrap();
+        logger.log_rehydrate("r3", 3).unwrap();
+
+        let (entries, total) = logger
+            .query(&crate::AuditQuery {
+                event: Some("pseudonymize".into()),
+                limit: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event, AuditEvent::Pseudonymize);
     }
 }
