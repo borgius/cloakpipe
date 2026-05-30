@@ -1,0 +1,953 @@
+openapi: 3.1.0
+info:
+  title: CloakPipe Admin API
+  version: 0.18.0
+  description: 'Self-hosted admin API for local CloakPipe. These routes are mounted **only** when CloakPipe
+    runs in `server` mode (`cloakpipe start server`) and live under the `/admin/api` namespace. They power
+    the local admin UI: system status, profiles, policies, categories/custom rules, audit logs and vault
+    inspection.
+
+
+    Security note: there is **no built-in authentication**. The admin API is intended for trusted/local
+    operators or to be fronted by an external auth proxy. Some routes expose sensitive data (raw vault
+    mappings) and are redacted by default.
+
+    '
+servers:
+- url: '{baseUrl}/admin/api'
+  description: Local CloakPipe server-mode instance
+  variables:
+    baseUrl:
+      default: http://127.0.0.1:8400
+tags:
+- name: system
+- name: profiles
+- name: policies
+- name: categories
+- name: audit
+- name: vault
+paths:
+  /system:
+    get:
+      tags:
+      - system
+      summary: Current runtime / config status
+      operationId: getSystem
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatus'
+  /sessions:
+    get:
+      tags:
+      - system
+      summary: Active session diagnostics
+      operationId: listSessions
+      responses:
+        '200':
+          description: Session runtime info
+          content:
+            application/json:
+              schema:
+                type: object
+  /profiles:
+    get:
+      tags:
+      - profiles
+      summary: List built-in industry profiles
+      operationId: listProfiles
+      responses:
+        '200':
+          description: Profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProfileSummary'
+  /profiles/{name}:
+    get:
+      tags:
+      - profiles
+      summary: Get one profile's detection config
+      operationId: getProfile
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Profile detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+  /profiles/{name}/activate:
+    post:
+      tags:
+      - profiles
+      summary: Activate a built-in profile (applies detection live)
+      operationId: activateProfile
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Activated profile (with optional warnings)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileDetail'
+        '400':
+          $ref: '#/components/responses/Error'
+  /policies:
+    get:
+      tags:
+      - policies
+      summary: List disk-backed policy files
+      operationId: listPolicies
+      responses:
+        '200':
+          description: Policies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PolicySummary'
+  /policies/{name}:
+    get:
+      tags:
+      - policies
+      summary: Fetch a policy file (with validation)
+      operationId: getPolicy
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Policy detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDetail'
+        '404':
+          $ref: '#/components/responses/Error'
+    put:
+      tags:
+      - policies
+      summary: Create or update a policy file (validated before save)
+      operationId: putPolicy
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyContent'
+      responses:
+        '200':
+          description: Saved policy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDetail'
+        '400':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags:
+      - policies
+      summary: Delete a policy file
+      operationId: deletePolicy
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          $ref: '#/components/responses/Error'
+  /policies/{name}/activate:
+    post:
+      tags:
+      - policies
+      summary: Apply a policy file as active config
+      operationId: activatePolicy
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Activation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyActivation'
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /policy/validate:
+    post:
+      tags:
+      - policies
+      summary: Validate policy content without saving
+      operationId: validatePolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyContent'
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationReport'
+  /categories:
+    get:
+      tags:
+      - categories
+      summary: Detection families, NER entity types and custom rules
+      operationId: listCategories
+      responses:
+        '200':
+          description: Categories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoriesResponse'
+  /categories/rules:
+    post:
+      tags:
+      - categories
+      summary: Create a custom regex rule
+      operationId: createRule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomPattern'
+      responses:
+        '200':
+          description: Updated rule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomPattern'
+        '400':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+  /categories/rules/{name}:
+    put:
+      tags:
+      - categories
+      summary: Update an existing custom rule
+      operationId: updateRule
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomPattern'
+      responses:
+        '200':
+          description: Updated rule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomPattern'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags:
+      - categories
+      summary: Delete a custom rule
+      operationId: deleteRule
+      parameters:
+      - $ref: '#/components/parameters/Name'
+      responses:
+        '200':
+          description: Updated rule list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomPattern'
+        '404':
+          $ref: '#/components/responses/Error'
+  /audit/events:
+    get:
+      tags:
+      - audit
+      summary: Query / filter audit events
+      operationId: queryAuditEvents
+      parameters:
+      - in: query
+        name: event
+        schema:
+          type: string
+      - in: query
+        name: surface
+        schema:
+          type: string
+      - in: query
+        name: session_id
+        schema:
+          type: string
+      - in: query
+        name: since
+        schema:
+          type: string
+      - in: query
+        name: until
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      - in: query
+        name: offset
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: Matching events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventsResponse'
+  /audit/summary:
+    get:
+      tags:
+      - audit
+      summary: Audit event counts
+      operationId: auditSummary
+      responses:
+        '200':
+          description: Summary counts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditSummaryResponse'
+  /audit/export:
+    get:
+      tags:
+      - audit
+      summary: Export audit events as CSV
+      operationId: auditExport
+      responses:
+        '200':
+          description: CSV export
+          content:
+            text/csv:
+              schema:
+                type: string
+  /vault/stats:
+    get:
+      tags:
+      - vault
+      summary: Enhanced vault statistics
+      operationId: vaultStats
+      responses:
+        '200':
+          description: Vault stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultStatsResponse'
+  /vault/mappings:
+    get:
+      tags:
+      - vault
+      summary: Inspect vault mappings (redacted by default)
+      description: 'Sensitive. Originals are redacted unless `reveal=true`, which additionally writes
+        an audit event. Search on originals only applies when revealing.
+
+        '
+      operationId: vaultMappings
+      parameters:
+      - in: query
+        name: search
+        schema:
+          type: string
+      - in: query
+        name: category
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          type: integer
+      - in: query
+        name: offset
+        schema:
+          type: integer
+      - in: query
+        name: reveal
+        schema:
+          type: boolean
+          default: false
+      responses:
+        '200':
+          description: Mappings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MappingsResponse'
+components:
+  parameters:
+    Name:
+      in: path
+      name: name
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AdminErrorBody'
+  schemas:
+    AdminErrorBody:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+          - code
+          - message
+      required:
+      - error
+    DetectionSummary:
+      type: object
+      properties:
+        secrets:
+          type: boolean
+        financial:
+          type: boolean
+        dates:
+          type: boolean
+        emails:
+          type: boolean
+        phone_numbers:
+          type: boolean
+        ip_addresses:
+          type: boolean
+        urls_internal:
+          type: boolean
+        custom_pattern_count:
+          type: integer
+      required:
+      - secrets
+      - financial
+      - dates
+      - emails
+      - phone_numbers
+      - ip_addresses
+      - urls_internal
+      - custom_pattern_count
+    NerSummary:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        backend:
+          type: string
+        model:
+          type:
+          - string
+          - 'null'
+        confidence_threshold:
+          type: number
+        sidecar_url:
+          type: string
+        entity_types:
+          type: array
+          items:
+            type: string
+      required:
+      - enabled
+      - backend
+      - model
+      - confidence_threshold
+      - sidecar_url
+      - entity_types
+    AuditSummaryInfo:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        backend:
+          type: string
+        location:
+          type:
+          - string
+          - 'null'
+        log_entities:
+          type: boolean
+        retention_days:
+          type: integer
+      required:
+      - enabled
+      - backend
+      - location
+      - log_entities
+      - retention_days
+    VaultSummary:
+      type: object
+      properties:
+        backend:
+          type: string
+        path:
+          type:
+          - string
+          - 'null'
+        persistent:
+          type: boolean
+        encryption:
+          type: string
+        total_mappings:
+          type: integer
+      required:
+      - backend
+      - path
+      - persistent
+      - encryption
+      - total_mappings
+    SystemStatus:
+      type: object
+      properties:
+        service:
+          type: string
+        version:
+          type: string
+        mode:
+          type: string
+        listen:
+          type: string
+        upstream:
+          type: string
+        active_profile:
+          type:
+          - string
+          - 'null'
+        config_path:
+          type:
+          - string
+          - 'null'
+        policies_dir:
+          type:
+          - string
+          - 'null'
+        masking_strategy:
+          type: string
+        detection:
+          $ref: '#/components/schemas/DetectionSummary'
+        ner:
+          $ref: '#/components/schemas/NerSummary'
+        audit:
+          $ref: '#/components/schemas/AuditSummaryInfo'
+        vault:
+          $ref: '#/components/schemas/VaultSummary'
+      required:
+      - service
+      - version
+      - mode
+      - listen
+      - upstream
+      - active_profile
+      - config_path
+      - policies_dir
+      - masking_strategy
+      - detection
+      - ner
+      - audit
+      - vault
+    DetectionConfig:
+      type: object
+      description: Full detection config (mirrors cloakpipe-core DetectionConfig).
+      additionalProperties: true
+    ProfileSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        active:
+          type: boolean
+        description:
+          type: string
+      required:
+      - name
+      - kind
+      - active
+      - description
+    ProfileDetail:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        active:
+          type: boolean
+        detection:
+          $ref: '#/components/schemas/DetectionConfig'
+        warnings:
+          type: array
+          items:
+            type: string
+      required:
+      - name
+      - kind
+      - active
+      - detection
+      - warnings
+    PolicySummary:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        active:
+          type: boolean
+        size_bytes:
+          type: integer
+      required:
+      - name
+      - path
+      - active
+      - size_bytes
+    ValidationReport:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        profile:
+          type:
+          - string
+          - 'null'
+        mode:
+          type:
+          - string
+          - 'null'
+      required:
+      - valid
+      - errors
+      - profile
+      - mode
+    PolicyDetail:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        active:
+          type: boolean
+        content:
+          type: string
+        valid:
+          type: boolean
+        validation:
+          $ref: '#/components/schemas/ValidationReport'
+      required:
+      - name
+      - path
+      - active
+      - content
+      - valid
+      - validation
+    PolicyContent:
+      type: object
+      properties:
+        content:
+          type: string
+      required:
+      - content
+    PolicyActivation:
+      type: object
+      properties:
+        activated:
+          type: boolean
+        name:
+          type: string
+        path:
+          type: string
+        active_profile:
+          type:
+          - string
+          - 'null'
+        restart_required:
+          type: boolean
+        warnings:
+          type: array
+          items:
+            type: string
+        note:
+          type: string
+      required:
+      - activated
+      - name
+      - path
+      - active_profile
+      - restart_required
+      - warnings
+      - note
+    CustomPattern:
+      type: object
+      properties:
+        name:
+          type: string
+        regex:
+          type: string
+        category:
+          type: string
+        value_group:
+          type:
+          - integer
+          - 'null'
+      required:
+      - name
+      - regex
+      - category
+    DetectionFamily:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        enabled:
+          type: boolean
+      required:
+      - key
+      - label
+      - enabled
+    CategoriesResponse:
+      type: object
+      properties:
+        families:
+          type: array
+          items:
+            $ref: '#/components/schemas/DetectionFamily'
+        ner_entity_types:
+          type: array
+          items:
+            type: string
+        custom_rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomPattern'
+      required:
+      - families
+      - ner_entity_types
+      - custom_rules
+    AuditEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+        event:
+          type: string
+        surface:
+          type: string
+        request_id:
+          type:
+          - string
+          - 'null'
+        user_id:
+          type:
+          - string
+          - 'null'
+        session_id:
+          type:
+          - string
+          - 'null'
+        entities_detected:
+          type:
+          - integer
+          - 'null'
+        entities_replaced:
+          type:
+          - integer
+          - 'null'
+        tokens_rehydrated:
+          type:
+          - integer
+          - 'null'
+        categories:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+      additionalProperties: true
+      required:
+      - id
+      - timestamp
+      - event
+      - surface
+      - request_id
+      - user_id
+      - session_id
+      - entities_detected
+      - entities_replaced
+      - tokens_rehydrated
+      - categories
+    AuditEventsResponse:
+      type: object
+      properties:
+        backend:
+          type: string
+        supported:
+          type: boolean
+        total_matched:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+      required:
+      - backend
+      - supported
+      - total_matched
+      - limit
+      - offset
+      - events
+    EventCount:
+      type: object
+      properties:
+        event:
+          type: string
+        count:
+          type: integer
+      required:
+      - event
+      - count
+    AuditSummaryResponse:
+      type: object
+      properties:
+        backend:
+          type: string
+        supported:
+          type: boolean
+        total:
+          type: integer
+        counts:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCount'
+      required:
+      - backend
+      - supported
+      - total
+      - counts
+    VaultStatsResponse:
+      type: object
+      properties:
+        backend:
+          type: string
+        path:
+          type:
+          - string
+          - 'null'
+        persistent:
+          type: boolean
+        encryption:
+          type: string
+        total_mappings:
+          type: integer
+        categories:
+          type: object
+          additionalProperties:
+            type: integer
+      required:
+      - backend
+      - path
+      - persistent
+      - encryption
+      - total_mappings
+      - categories
+    MappingEntry:
+      type: object
+      properties:
+        token:
+          type: string
+        category:
+          type: string
+        original:
+          type: string
+        redacted:
+          type: boolean
+      required:
+      - token
+      - category
+      - original
+      - redacted
+    MappingsResponse:
+      type: object
+      properties:
+        redacted:
+          type: boolean
+        total_matched:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        mappings:
+          type: array
+          items:
+            $ref: '#/components/schemas/MappingEntry'
+        warning:
+          type:
+          - string
+          - 'null'
+      required:
+      - redacted
+      - total_matched
+      - limit
+      - offset
+      - mappings
+      - warning
