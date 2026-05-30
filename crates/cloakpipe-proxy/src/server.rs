@@ -1,6 +1,6 @@
 //! HTTP server setup and router configuration.
 
-use crate::{handlers, http_proxy, llm_proxy, state::AppState, tree_handlers};
+use crate::{admin, handlers, http_proxy, llm_proxy, state::AppState, tree_handlers};
 use axum::{
     routing::any,
     routing::{get, post},
@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-fn build_server_router() -> Router<Arc<AppState>> {
+fn build_server_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(handlers::health))
         // Direct privacy endpoints (same request/response shapes as the MCP tools)
@@ -42,18 +42,26 @@ fn build_server_router() -> Router<Arc<AppState>> {
         .route("/tree/list", get(tree_handlers::tree_list))
         .route("/tree/query", post(tree_handlers::tree_query))
         .route(
-            "/tree/{id}",
+            "/tree/:id",
             get(tree_handlers::tree_get).delete(tree_handlers::tree_delete),
         )
-        .route("/tree/{id}/search", post(tree_handlers::tree_search))
+        .route("/tree/:id/search", post(tree_handlers::tree_search))
         // Session management endpoints
         .route(
             "/sessions",
             get(handlers::sessions_list).delete(handlers::sessions_flush_all),
         )
         .route(
-            "/sessions/{id}",
+            "/sessions/:id",
             get(handlers::session_inspect).delete(handlers::session_flush),
+        )
+        // Self-hosted admin API (server mode only)
+        .nest(
+            "/admin/api",
+            admin::router().route_layer(axum::middleware::from_fn_with_state(
+                state,
+                admin::require_auth,
+            )),
         )
 }
 
@@ -67,7 +75,7 @@ fn build_llm_proxy_router() -> Router<Arc<AppState>> {
 /// Build the axum router with mode-specific routes and middleware.
 pub fn build_router(state: Arc<AppState>) -> Router {
     let router = match state.config.proxy.mode {
-        ProxyMode::Server => build_server_router(),
+        ProxyMode::Server => build_server_router(state.clone()),
         ProxyMode::LlmProxy => build_llm_proxy_router(),
         ProxyMode::HttpProxy => Router::new()
             .route("/", any(http_proxy::proxy_request))

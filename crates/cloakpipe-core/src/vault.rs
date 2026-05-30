@@ -297,6 +297,34 @@ impl Vault {
         }
     }
 
+    /// Whether this vault is backed by a file on disk (vs. ephemeral/in-memory).
+    pub fn is_persistent(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Path of the backing vault file, if any.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
+    /// Inspect the stored mappings.
+    ///
+    /// The `original` value is sensitive; callers are responsible for
+    /// redacting it unless the operator has explicitly opted in to reveal it.
+    pub fn mappings(&self) -> Vec<MappingView> {
+        let mut views: Vec<MappingView> = self
+            .forward
+            .iter()
+            .map(|(original, token)| MappingView {
+                token: token.token.clone(),
+                category: Self::category_prefix(&token.category),
+                original: original.clone(),
+            })
+            .collect();
+        views.sort_by(|a, b| a.category.cmp(&b.category).then(a.token.cmp(&b.token)));
+        views
+    }
+
     fn category_prefix(category: &EntityCategory) -> String {
         match category {
             EntityCategory::Person => "PERSON".into(),
@@ -412,6 +440,14 @@ impl Vault {
 pub struct VaultStats {
     pub total_mappings: usize,
     pub categories: HashMap<String, u32>,
+}
+
+/// A single vault mapping for inspection. The `original` field is sensitive.
+#[derive(Debug, Clone, Serialize)]
+pub struct MappingView {
+    pub token: String,
+    pub category: String,
+    pub original: String,
 }
 
 #[cfg(test)]

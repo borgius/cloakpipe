@@ -504,6 +504,76 @@ cloakpipe health
 
 ---
 
+## Self-Hosted Admin UI
+
+CloakPipe ships a self-hosted **admin UI** for local operators: a React + TypeScript
++ Vite SPA (TanStack Router/Query/Table) to manage profiles, policies, detection
+categories/rules, audit logs, and the vault. It lives in [`apps/admin-ui`](apps/admin-ui)
+and talks to the admin API exposed under `/admin/api/*`.
+
+The admin API is mounted **only** in `server` mode:
+
+```bash
+# 1. Start CloakPipe in server mode (exposes /admin/api/*)
+cloakpipe start server
+
+# 2. Serve the admin UI (zero-dependency npm package)
+npx cloakpipe serve
+# → CloakPipe admin UI → http://127.0.0.1:8420
+```
+
+`npx cloakpipe serve` serves the compiled SPA and reverse-proxies `/admin`, `/v1`,
+`/tree`, `/sessions`, and `/health` to the backend (default `http://127.0.0.1:8400`,
+override with `--backend` / `CLOAKPIPE_BASE_URL`), so the UI runs same-origin.
+
+**Pages:** Overview · Profiles · Policies · Categories & Rules · Audit Logs ·
+Vault & Secrets · Sessions.
+
+**Environment variables:**
+
+| Variable                  | Used by         | Default               | Purpose                                    |
+| ------------------------- | --------------- | --------------------- | ------------------------------------------ |
+| `VITE_CLOAKPIPE_BASE_URL` | SPA (dev/build) | same-origin           | Backend base URL for the SPA.              |
+| `CLOAKPIPE_BASE_URL`      | `cloakpipe serve` | `http://127.0.0.1:8400` | Backend to reverse-proxy.                |
+| `PORT` / `HOST`           | `cloakpipe serve` | `8420` / `127.0.0.1`  | Where the admin UI server listens.         |
+| `CLOAKPIPE_ADMIN_TOKEN`   | server          | _unset_               | Optional bearer token guarding `/admin/api/*`. |
+
+**Optional admin authentication:**
+
+Set `CLOAKPIPE_ADMIN_TOKEN` (or point `proxy.admin_token_env` at a different env
+var) when starting the server to require a bearer token on every `/admin/api/*`
+request. When unset, the admin API is unauthenticated (trusted/local default). In
+the UI, supply the token via the **Admin token** control in the sidebar; it is sent
+as an `Authorization` bearer header and stored in the browser's `localStorage`.
+
+**Custom profiles:**
+
+In addition to the built-in industry templates, you can create, update, and delete
+**user-defined custom profiles** from the Profiles page. They are persisted as JSON
+under the profiles directory (`<config-dir>/profiles` by default) and can be
+activated like any built-in. Built-in profile names are reserved.
+
+**Limitations & security:**
+
+- ⚠️ **Authentication is optional and off by default.** The admin API can
+  read/modify policies and reveal vault secrets. Set `CLOAKPIPE_ADMIN_TOKEN` to
+  require a bearer token, bind to `127.0.0.1` (default), and/or front it with an
+  authenticating reverse proxy. Do **not** expose an unauthenticated
+  `/admin/api/*` to untrusted networks.
+- Vault originals are **redacted by default**; revealing them requires explicit
+  confirmation and writes an audit event.
+- Audit querying is supported on both the **SQLite** and **JSONL** backends; a
+  **disabled** backend returns a clear unsupported state.
+- Listener/upstream/masking changes from a policy require a **restart**; detection
+  settings apply live.
+- This UI targets **self-hosted/local** CloakPipe and is independent of CloakPipe
+  Cloud.
+
+See [`apps/admin-ui/README.md`](apps/admin-ui/README.md) and
+[`packages/cloakpipe-serve/README.md`](packages/cloakpipe-serve/README.md) for details.
+
+---
+
 ## Configuration
 
 ### Environment Variables
